@@ -13,11 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip the project
+      - name: Create the project
         run: |
-          test -f floaty.zip || { echo "floaty.zip is missing - upload it to the repository first"; exit 1; }
+          test -f make.sh || { echo "make.sh is missing - add it to the repository first"; exit 1; }
           mkdir project
-          unzip -q floaty.zip -d project
+          cd project
+          bash ../make.sh
 
       - uses: actions/setup-java@v4
         with:
