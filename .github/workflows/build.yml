@@ -1,0 +1,40 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip the project
+        run: |
+          test -f floaty.zip || { echo "floaty.zip is missing - upload it to the repository first"; exit 1; }
+          mkdir project
+          unzip -q floaty.zip -d project
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build
+        working-directory: project
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Publish APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp project/app/build/outputs/apk/debug/app-debug.apk Floaty.apk
+          gh release create "build-${{ github.run_number }}" Floaty.apk --title "Floaty build ${{ github.run_number }}" --notes "Install Floaty.apk on your tablet."
