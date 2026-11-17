@@ -31,11 +31,13 @@ jobs:
 
       - name: Build
         working-directory: project
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Publish APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp project/app/build/outputs/apk/debug/app-debug.apk Floaty.apk
-          gh release create "build-${{ github.run_number }}" Floaty.apk --title "Floaty build ${{ github.run_number }}" --notes "Install Floaty.apk on your tablet."
+          cp project/app/build/outputs/apk/debug/app-debug.apk Watchu.apk
+          gh release create "build-${{ github.run_number }}" Watchu.apk --title "Watchu build ${{ github.run_number }}" --notes "Install Watchu.apk on your tablet."
