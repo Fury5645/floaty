@@ -18,6 +18,15 @@ android {
         versionName '1.0'
     }
 
+    signingConfigs {
+        debug {
+            storeFile file('watchu.keystore')
+            storePassword System.getenv('KEYSTORE_PASSWORD')
+            keyAlias 'watchu'
+            keyPassword System.getenv('KEYSTORE_PASSWORD')
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
