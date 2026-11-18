@@ -20,6 +20,18 @@ jobs:
           cd project
           bash ../make.sh
 
+      - name: Add the private signing key (if you set the secrets)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > project/app/watchu.keystore
+            echo "Private key added."
+          else
+            echo "::warning::Secrets not set, using the default key. Updates will need an uninstall first."
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -33,6 +45,7 @@ jobs:
         working-directory: project
         env:
           BUILD_NUMBER: ${{ github.run_number }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Publish APK
