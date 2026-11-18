@@ -2529,4 +2529,1237 @@ public class MainActivity extends Activity {
         } else {
             startText.setText("Start floating timer");
             startText.setTextColor(ui.onPrimary);
-            startBar.
+            startBar.setBackground(ui.rounded(ui.primary, 28));
+            startIcon.setImageResource(R.drawable.ic_play);
+            startIcon.setImageTintList(ColorStateList.valueOf(ui.onPrimary));
+        }
+    }
+
+    private void onStartStop() {
+        if (FloatingService.active) {
+            sendToService(FloatingService.ACTION_STOP);
+            handler.postDelayed(this::updateStartBtn, 300L);
+            return;
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Turn on \"Display over other apps\" for Watchu, then come back.",
+                    Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        startForegroundService(new Intent(this, FloatingService.class));
+        handler.postDelayed(this::updateStartBtn, 300L);
+        moveTaskToBack(true);
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/Prefs.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+/** All saved settings live here, with their default values. */
+final class Prefs {
+    private Prefs() { }
+
+    static final int MODE_COUNTDOWN = 0;
+    static final int MODE_STOPWATCH = 1;
+    static final int MODE_POMODORO = 2;
+    static final int MODE_CLOCK = 3;
+
+    static final int SHAPE_CIRCLE = 0;
+    static final int SHAPE_SQUIRCLE = 1;
+    static final int SHAPE_PILL = 2;
+
+    static final int FONT_LIGHT = 0;
+    static final int FONT_REGULAR = 1;
+    static final int FONT_BOLD = 2;
+    static final int FONT_MONO = 3;
+
+    static final int BGMODE_SOLID = 0;
+    static final int BGMODE_GRADIENT = 1;
+    static final int BGMODE_ANIM = 2;
+
+    static final int THEME_AUTO = 0;
+    static final int THEME_LIGHT = 1;
+    static final int THEME_DARK = 2;
+    static final int THEME_AMOLED = 3;
+
+    static final int FACE_DIGITAL = 0;
+    static final int FACE_MINIMAL = 1;
+    static final int FACE_NUMBERS = 2;
+
+    static final String BG2 = "bg2";
+    static final String BGMODE = "bg_mode";
+    static final String MODE = "mode";
+    static final String CD_MIN = "cd_min";
+    static final String CD_SEC = "cd_sec";
+    static final String POMO_WORK = "pomo_work";
+    static final String POMO_SHORT = "pomo_short";
+    static final String POMO_LONG = "pomo_long";
+    static final String POMO_ROUNDS = "pomo_rounds";
+    static final String CLOCK_24 = "clock_24";
+    static final String CLOCK_SEC = "clock_sec";
+    static final String CLOCK_FACE = "clock_face";
+    static final String SHAPE = "shape";
+    static final String FONT = "font";
+    /** 0 off, 1 thin, 2 medium, 3 thick */
+    static final String RING = "ring_w";
+    static final String SIZE = "size_dp";
+    static final String OPACITY = "opacity";
+    static final String BG = "bg";
+    static final String FG = "fg";
+    static final String ACCENT = "accent";
+    static final String SOUND = "sound";
+    static final String VIBRATE = "vibrate";
+    static final String LOUD = "loud_alarm";
+    static final String POS_X = "pos_x";
+    static final String POS_Y = "pos_y";
+
+    static final String THEME = "app_theme";
+    static final String LOCK = "lock_pos";
+    static final String SNAP = "snap_edge";
+    static final String FADE = "fade_idle";
+    static final String AUTONEXT = "auto_next";
+    static final String SKIPPROMPT = "skip_prompt";
+    static final String CYCLES = "cycle_counter";
+    static final String GUIDE_SEEN = "guide_seen";
+    static final String TIMER_SECS = "timer_secs";
+    static final String SCREEN_PAUSE = "screen_pause";
+    static final String MOTION_PAUSE = "motion_pause";
+
+    /** Saved presets, one per line: name|mode|cdMin|cdSec|work|short|long|rounds */
+    static final String PRESETS = "presets_saved";
+    /** Hidden built-in presets, names separated by newline. */
+    static final String PRESETS_HIDDEN = "presets_hidden";
+
+    /** Formats a duration. With seconds hidden it shows minutes only, like 25m or 1h 05m. */
+    static String fmtTime(long ms, boolean roundUp, boolean secs) {
+        if (secs) {
+            long s = roundUp ? (ms + 999L) / 1000L : ms / 1000L;
+            long h = s / 3600L;
+            long m = (s % 3600L) / 60L;
+            long sec = s % 60L;
+            if (h > 0) return String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, sec);
+            return String.format(java.util.Locale.US, "%02d:%02d", m, sec);
+        }
+        long mins = roundUp ? (ms + 59999L) / 60000L : ms / 60000L;
+        if (mins >= 60) {
+            return String.format(java.util.Locale.US, "%dh %02dm", mins / 60L, mins % 60L);
+        }
+        return mins + "m";
+    }
+
+    static SharedPreferences get(Context c) {
+        return c.getApplicationContext().getSharedPreferences("watchu", Context.MODE_PRIVATE);
+    }
+
+    static int getInt(SharedPreferences p, String key) {
+        return p.getInt(key, defaultFor(key));
+    }
+
+    static int defaultFor(String key) {
+        switch (key) {
+            case MODE: return MODE_COUNTDOWN;
+            case CD_MIN: return 10;
+            case CD_SEC: return 0;
+            case POMO_WORK: return 25;
+            case POMO_SHORT: return 5;
+            case POMO_LONG: return 15;
+            case POMO_ROUNDS: return 4;
+            case CLOCK_24: return 1;
+            case CLOCK_SEC: return 0;
+            case CLOCK_FACE: return FACE_DIGITAL;
+            case SHAPE: return SHAPE_CIRCLE;
+            case FONT: return FONT_REGULAR;
+            case RING: return 3;
+            case SIZE: return 110;
+            case OPACITY: return 95;
+            case BG: return 0xFF14161C;
+            case BG2: return 0xFF3B2A6B;
+            case BGMODE: return BGMODE_SOLID;
+            case FG: return 0xFFFFFFFF;
+            case ACCENT: return 0xFF7C9CFF;
+            case SOUND: return 1;
+            case VIBRATE: return 1;
+            case LOUD: return 0;
+            case POS_X: return -1;
+            case POS_Y: return -1;
+            case THEME: return THEME_AUTO;
+            case LOCK: return 0;
+            case SNAP: return 1;
+            case FADE: return 1;
+            case AUTONEXT: return 1;
+            case SKIPPROMPT: return 1;
+            case CYCLES: return 1;
+            case GUIDE_SEEN: return 0;
+            case TIMER_SECS: return 1;
+            case SCREEN_PAUSE: return 0;
+            case MOTION_PAUSE: return 0;
+            default: return 0;
+        }
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/Presets.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.SharedPreferences;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Built-in and saved presets. A preset is a full timer setup. */
+final class Presets {
+    private Presets() { }
+
+    static final class Preset {
+        String name;
+        int mode;
+        int cdMin;
+        int cdSec;
+        int work;
+        int shortBreak;
+        int longBreak;
+        int rounds;
+        boolean builtIn;
+
+        Preset(String name, int mode, int cdMin, int cdSec, int work, int shortBreak,
+               int longBreak, int rounds, boolean builtIn) {
+            this.name = name;
+            this.mode = mode;
+            this.cdMin = cdMin;
+            this.cdSec = cdSec;
+            this.work = work;
+            this.shortBreak = shortBreak;
+            this.longBreak = longBreak;
+            this.rounds = rounds;
+            this.builtIn = builtIn;
+        }
+    }
+
+    static List<Preset> builtIns() {
+        List<Preset> l = new ArrayList<>();
+        l.add(new Preset("Study 25/5", Prefs.MODE_POMODORO, 10, 0, 25, 5, 15, 4, true));
+        l.add(new Preset("Deep work 50/10", Prefs.MODE_POMODORO, 10, 0, 50, 10, 20, 3, true));
+        l.add(new Preset("Exam 3 h", Prefs.MODE_COUNTDOWN, 180, 0, 25, 5, 15, 4, true));
+        l.add(new Preset("Workout 45", Prefs.MODE_COUNTDOWN, 45, 0, 25, 5, 15, 4, true));
+        l.add(new Preset("Cooking 15", Prefs.MODE_COUNTDOWN, 15, 0, 25, 5, 15, 4, true));
+        l.add(new Preset("Meditation 10", Prefs.MODE_COUNTDOWN, 10, 0, 25, 5, 15, 4, true));
+        return l;
+    }
+
+    static List<Preset> saved(SharedPreferences p) {
+        List<Preset> l = new ArrayList<>();
+        String raw = p.getString(Prefs.PRESETS, "");
+        if (raw == null || raw.isEmpty()) return l;
+        for (String line : raw.split("\n")) {
+            String[] f = line.split("\\|", -1);
+            if (f.length < 8) continue;
+            try {
+                l.add(new Preset(f[0], Integer.parseInt(f[1]), Integer.parseInt(f[2]),
+                        Integer.parseInt(f[3]), Integer.parseInt(f[4]), Integer.parseInt(f[5]),
+                        Integer.parseInt(f[6]), Integer.parseInt(f[7]), false));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return l;
+    }
+
+    static void writeSaved(SharedPreferences p, List<Preset> list) {
+        StringBuilder sb = new StringBuilder();
+        for (Preset x : list) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(clean(x.name)).append('|').append(x.mode).append('|').append(x.cdMin)
+                    .append('|').append(x.cdSec).append('|').append(x.work).append('|')
+                    .append(x.shortBreak).append('|').append(x.longBreak).append('|')
+                    .append(x.rounds);
+        }
+        p.edit().putString(Prefs.PRESETS, sb.toString()).apply();
+    }
+
+    static String clean(String s) {
+        String t = s.replace('|', ' ').replace('\n', ' ').trim();
+        if (t.length() > 18) t = t.substring(0, 18);
+        return t.isEmpty() ? "My preset" : t;
+    }
+
+    static List<String> hidden(SharedPreferences p) {
+        List<String> l = new ArrayList<>();
+        String raw = p.getString(Prefs.PRESETS_HIDDEN, "");
+        if (raw == null || raw.isEmpty()) return l;
+        for (String s : raw.split("\n")) {
+            if (!s.isEmpty()) l.add(s);
+        }
+        return l;
+    }
+
+    static void writeHidden(SharedPreferences p, List<String> names) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : names) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(s);
+        }
+        p.edit().putString(Prefs.PRESETS_HIDDEN, sb.toString()).apply();
+    }
+
+    /** Apply a preset to the stored settings. */
+    static void apply(SharedPreferences p, Preset x) {
+        p.edit().putInt(Prefs.MODE, x.mode)
+                .putInt(Prefs.CD_MIN, x.cdMin)
+                .putInt(Prefs.CD_SEC, x.cdSec)
+                .putInt(Prefs.POMO_WORK, x.work)
+                .putInt(Prefs.POMO_SHORT, x.shortBreak)
+                .putInt(Prefs.POMO_LONG, x.longBreak)
+                .putInt(Prefs.POMO_ROUNDS, x.rounds)
+                .apply();
+    }
+
+    /** True when the stored settings equal this preset (only the fields its mode uses). */
+    static boolean matches(SharedPreferences p, Preset x) {
+        if (Prefs.getInt(p, Prefs.MODE) != x.mode) return false;
+        if (x.mode == Prefs.MODE_COUNTDOWN) {
+            return Prefs.getInt(p, Prefs.CD_MIN) == x.cdMin && Prefs.getInt(p, Prefs.CD_SEC) == x.cdSec;
+        }
+        if (x.mode == Prefs.MODE_POMODORO) {
+            return Prefs.getInt(p, Prefs.POMO_WORK) == x.work
+                    && Prefs.getInt(p, Prefs.POMO_SHORT) == x.shortBreak
+                    && Prefs.getInt(p, Prefs.POMO_LONG) == x.longBreak
+                    && Prefs.getInt(p, Prefs.POMO_ROUNDS) == x.rounds;
+        }
+        return true;
+    }
+
+    static Preset current(SharedPreferences p, String name) {
+        return new Preset(name, Prefs.getInt(p, Prefs.MODE), Prefs.getInt(p, Prefs.CD_MIN),
+                Prefs.getInt(p, Prefs.CD_SEC), Prefs.getInt(p, Prefs.POMO_WORK),
+                Prefs.getInt(p, Prefs.POMO_SHORT), Prefs.getInt(p, Prefs.POMO_LONG),
+                Prefs.getInt(p, Prefs.POMO_ROUNDS), false);
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/SettingsActivity.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.net.Uri;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.CompoundButton;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+/** Settings screen: theme, bubble behaviour, Pomodoro, alerts, help, privacy and about. */
+public class SettingsActivity extends Activity {
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    static final String FEEDBACK_URL = "https://t.me/watchuhq";
+    static final String UPDATE_URL = "https://github.com/Fury5645/floaty/releases";
+
+    private SharedPreferences p;
+    private Ui ui;
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        p = Prefs.get(this);
+        ui = new Ui(this, p);
+        ui.styleWindow(this);
+
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackgroundColor(ui.surface);
+        int maxW = Math.min(getResources().getDisplayMetrics().widthPixels, ui.dp(640));
+        LinearLayout column = ui.vertical();
+        frame.addView(column, new FrameLayout.LayoutParams(maxW, MATCH, Gravity.CENTER_HORIZONTAL));
+
+        LinearLayout top = ui.horizontal();
+        top.setPadding(ui.dp(8), ui.dp(6), ui.dp(8), ui.dp(6));
+        ImageView back = ui.icon(R.drawable.ic_back, 24, ui.onSurface);
+        back.setPadding(ui.dp(10), ui.dp(10), ui.dp(10), ui.dp(10));
+        back.setContentDescription("Back");
+        back.setOnClickListener(v -> finish());
+        top.addView(back, new LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)));
+        top.addView(ui.medium("Settings", 22, ui.onSurface), ui.lp(WRAP, WRAP, 4, 0, 0, 0));
+        column.addView(top, new LinearLayout.LayoutParams(MATCH, ui.dp(56)));
+
+        ScrollView sv = new ScrollView(this);
+        LinearLayout box = ui.vertical();
+        box.setPadding(ui.dp(16), 0, ui.dp(16), ui.dp(24));
+        sv.addView(box, new FrameLayout.LayoutParams(MATCH, WRAP));
+        column.addView(sv, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+
+        // Appearance
+        box.addView(ui.section("Appearance"), ui.lp(MATCH, WRAP, 0, 12, 0, 8));
+        box.addView(ui.text("Theme", 16, ui.onSurface), ui.lp(MATCH, WRAP, 0, 0, 0, 8));
+        box.addView(ui.segmented(new String[]{"Auto", "Light", "Dark", "AMOLED"},
+                Prefs.getInt(p, Prefs.THEME), v -> {
+                    p.edit().putInt(Prefs.THEME, v).apply();
+                    recreate();
+                }), ui.lp(MATCH, ui.dp(40), 0, 0, 0, 0));
+        box.addView(ui.text("Auto follows your phone. AMOLED is pure black and saves battery on OLED screens.",
+                13, ui.variant), ui.lp(MATCH, WRAP, 0, 6, 0, 4));
+
+        // Bubble
+        box.addView(ui.section("Bubble"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
+        toggle(box, "Lock position", "Stops accidental dragging", Prefs.LOCK);
+        toggle(box, "Snap to edge", "Sticks to the nearest side of the screen", Prefs.SNAP);
+        toggle(box, "Fade when idle", "Goes see-through after 5 seconds, solid on touch", Prefs.FADE);
+        toggle(box, "Show seconds on timers", "Off shows minutes only, like 25m. Clock has its own switch.",
+                Prefs.TIMER_SECS);
+
+        // Pomodoro
+        box.addView(ui.section("Pomodoro"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
+        toggle(box, "Auto-start next phase", "Off means it waits for your tap", Prefs.AUTONEXT);
+        toggle(box, "\"Skip break?\" prompt", "Shown on the bubble when a break starts", Prefs.SKIPPROMPT);
+        toggle(box, "Cycle counter", "Shows the cycle number on the bubble", Prefs.CYCLES);
+
+        // Alerts
+        box.addView(ui.section("Alerts"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
+        toggle(box, "Sound", "Quiet on silent mode and Do Not Disturb", Prefs.SOUND);
+        toggle(box, "Vibration", null, Prefs.VIBRATE);
+        toggle(box, "Loud alarm", "Rings even on silent or Do Not Disturb", Prefs.LOUD);
+
+        // Advanced
+        box.addView(ui.section("Advanced"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
+        toggle(box, "Pause when screen turns off",
+                "Resumes when the screen turns on. Not used by Clock.", Prefs.SCREEN_PAUSE);
+        toggle(box, "Pause when phone moves",
+                "Pauses while the phone is picked up or moved, resumes after 5 still seconds.",
+                Prefs.MOTION_PAUSE);
+
+        // Help
+        box.addView(ui.section("Help"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
+        box.addView(linkRow(R.drawable.ic_help, "Quick guide", "Replay the four-step tutorial",
+                v -> startActivity(new Intent(this, GuideActivity.class))));
+        box.addView(linkRow(R.drawable.ic_download, "Check for updates",
+                "Opens the download page in your browser. You have version " + versionText() + ".",
+                v -> openLink(UPDATE_URL)));
+        box.addView(linkRow(R.drawable.ic_mail, "Send feedback",
+                "Opens Telegram (WATCHU HQ). Nothing is sent automatically.",
+                v -> openLink(FEEDBACK_URL)));
+
+        // Privacy
+        box.addView(ui.section("Privacy"), ui.lp(MATCH, WRAP, 0, 16, 0, 8));
+        LinearLayout card = ui.horizontal();
+        card.setGravity(Gravity.TOP);
+        card.setBackground(ui.rounded(ui.greenC, 24));
+        card.setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(16));
+        card.addView(ui.icon(R.drawable.ic_shield, 28, ui.onGreenC), ui.lp(ui.dp(28), ui.dp(28), 0, 0, 14, 0));
+        LinearLayout txt = ui.vertical();
+        txt.addView(ui.medium("No data collected", 16, ui.onGreenC));
+        txt.addView(ui.text("Watchu does not collect, store or share personal data. It has no internet "
+                + "permission, so it cannot send anything anywhere. Your settings stay on this device.",
+                14, ui.onGreenC), ui.lp(MATCH, WRAP, 0, 4, 0, 0));
+        card.addView(txt, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        box.addView(card, ui.lp(MATCH, WRAP, 0, 0, 0, 0));
+
+        // About
+        box.addView(ui.section("About"), ui.lp(MATCH, WRAP, 0, 20, 0, 6));
+        box.addView(ui.text("Watchu " + versionText(), 16, ui.onSurface));
+        box.addView(ui.text("Free for life. No ads. No premium.", 14, ui.variant), ui.lp(MATCH, WRAP, 0, 2, 0, 0));
+
+        setContentView(frame);
+    }
+
+    private String versionText() {
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return pi.versionName + " (build " + pi.versionCode + ")";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void toggle(LinearLayout box, String title, String sub, final String key) {
+        box.addView(ui.switchRow(title, sub, Prefs.getInt(p, key) == 1,
+                new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton b, boolean on) {
+                        p.edit().putInt(key, on ? 1 : 0).apply();
+                        if (FloatingService.active) {
+                            Intent i = new Intent(SettingsActivity.this, FloatingService.class);
+                            i.setAction(FloatingService.ACTION_REFRESH);
+                            startService(i);
+                        }
+                    }
+                }));
+    }
+
+    private View linkRow(int iconRes, String title, String sub, View.OnClickListener l) {
+        LinearLayout row = ui.horizontal();
+        row.setMinimumHeight(ui.dp(64));
+        row.addView(ui.icon(iconRes, 24, ui.variant), ui.lp(ui.dp(24), ui.dp(24), 0, 0, 16, 0));
+        LinearLayout t = ui.vertical();
+        t.addView(ui.text(title, 16, ui.onSurface));
+        t.addView(ui.text(sub, 13, ui.variant));
+        row.addView(t, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        row.setOnClickListener(l);
+        return row;
+    }
+
+    private void openLink(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not open " + url, Toast.LENGTH_LONG).show();
+        }
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/Ui.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.CompoundButton;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.Switch;
+import android.widget.TextView;
+
+/** Colours for the app screens (light, dark, AMOLED) and small view-building helpers. */
+final class Ui {
+    static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+
+    interface IntCb {
+        void on(int value);
+    }
+
+    final Context ctx;
+    final float density;
+    final int themeId;
+    final boolean dark;
+    final int surface;
+    final int container;
+    final int high;
+    final int onSurface;
+    final int variant;
+    final int outline;
+    final int primary;
+    final int onPrimary;
+    final int secC;
+    final int onSecC;
+    final int line;
+    final int greenC;
+    final int onGreenC;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    /** Turns the saved choice (which may be Auto) into Light, Dark or AMOLED. */
+    static int resolveTheme(Context c, SharedPreferences p) {
+        int t = Prefs.getInt(p, Prefs.THEME);
+        if (t != Prefs.THEME_AUTO) return t;
+        int night = c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        return night == Configuration.UI_MODE_NIGHT_YES ? Prefs.THEME_DARK : Prefs.THEME_LIGHT;
+    }
+
+    Ui(Context c, SharedPreferences p) {
+        ctx = c;
+        density = c.getResources().getDisplayMetrics().density;
+        themeId = resolveTheme(c, p);
+        dark = themeId != Prefs.THEME_LIGHT;
+        if (themeId == Prefs.THEME_LIGHT) {
+            surface = 0xFFF8F9FF;
+            container = 0xFFECEDF4;
+            high = 0xFFE1E2E9;
+            onSurface = 0xFF191C20;
+            variant = 0xFF43474E;
+            outline = 0xFF73777F;
+            primary = 0xFF415F91;
+            onPrimary = 0xFFFFFFFF;
+            secC = 0xFFD6E3FF;
+            onSecC = 0xFF001B3E;
+            line = 0xFFD2D5DC;
+            greenC = 0xFFC3F0D6;
+            onGreenC = 0xFF00391F;
+        } else {
+            boolean black = themeId == Prefs.THEME_AMOLED;
+            surface = black ? 0xFF000000 : 0xFF101319;
+            container = black ? 0xFF0D0E11 : 0xFF1D2025;
+            high = black ? 0xFF1A1C20 : 0xFF272A30;
+            onSurface = 0xFFE1E2E9;
+            variant = 0xFFC3C6CF;
+            outline = 0xFF8D9199;
+            primary = 0xFFA9C7FF;
+            onPrimary = 0xFF08305F;
+            secC = 0xFF3F4759;
+            onSecC = 0xFFDBE2F9;
+            line = black ? 0xFF22252A : 0xFF2B2F36;
+            greenC = 0xFF0F3D27;
+            onGreenC = 0xFFA0F4C0;
+        }
+    }
+
+    /** Status bar and navigation bar colours that match the theme. */
+    void styleWindow(android.app.Activity a) {
+        android.view.Window w = a.getWindow();
+        w.setStatusBarColor(surface);
+        w.setNavigationBarColor(surface);
+        int flags = 0;
+        if (!dark) {
+            flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        w.getDecorView().setSystemUiVisibility(flags);
+    }
+
+    int dp(float v) {
+        return Math.round(v * density);
+    }
+
+    GradientDrawable rounded(int color, float radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radiusDp));
+        return g;
+    }
+
+    GradientDrawable outlined(int fill, int stroke, float radiusDp) {
+        GradientDrawable g = rounded(fill, radiusDp);
+        g.setStroke(dp(1), stroke);
+        return g;
+    }
+
+    TextView text(String s, float sp, int color) {
+        TextView t = new TextView(ctx);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        return t;
+    }
+
+    TextView medium(String s, float sp, int color) {
+        TextView t = text(s, sp, color);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        return t;
+    }
+
+    LinearLayout.LayoutParams lp(int w, int h, float l, float t, float r, float b) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h);
+        p.setMargins(dp(l), dp(t), dp(r), dp(b));
+        return p;
+    }
+
+    LinearLayout vertical() {
+        LinearLayout l = new LinearLayout(ctx);
+        l.setOrientation(LinearLayout.VERTICAL);
+        return l;
+    }
+
+    LinearLayout horizontal() {
+        LinearLayout l = new LinearLayout(ctx);
+        l.setOrientation(LinearLayout.HORIZONTAL);
+        l.setGravity(Gravity.CENTER_VERTICAL);
+        return l;
+    }
+
+    /** An icon from the drawable folder, painted in one colour. */
+    ImageView icon(int resId, int sizeDp, int color) {
+        ImageView v = new ImageView(ctx);
+        v.setImageResource(resId);
+        v.setImageTintList(ColorStateList.valueOf(color));
+        v.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        v.setLayoutParams(new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp)));
+        return v;
+    }
+
+    /** Section heading in the accent colour. */
+    TextView section(String s) {
+        return medium(s, 14, primary);
+    }
+
+    /** A row of equal buttons where one is selected. */
+    LinearLayout segmented(String[] labels, int selected, IntCb cb) {
+        return segmented(labels, null, selected, cb);
+    }
+
+    LinearLayout segmented(final String[] labels, final Typeface[] faces, int selected, final IntCb cb) {
+        final LinearLayout box = new LinearLayout(ctx);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        box.setBackground(outlined(0x00000000, outline, 20));
+        box.setClipToOutline(true);
+        final TextView[] items = new TextView[labels.length];
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            TextView t = new TextView(ctx);
+            t.setText(labels[i]);
+            t.setTextSize(14);
+            t.setGravity(Gravity.CENTER);
+            t.setSingleLine(true);
+            t.setPadding(dp(4), 0, dp(4), 0);
+            if (faces != null && faces[i] != null) {
+                t.setTypeface(faces[i]);
+            } else {
+                t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            }
+            t.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    paintSegments(items, idx);
+                    cb.on(idx);
+                }
+            });
+            items[i] = t;
+            if (i > 0) {
+                View sep = new View(ctx);
+                sep.setBackgroundColor(outline);
+                box.addView(sep, new LinearLayout.LayoutParams(dp(1), MATCH));
+            }
+            box.addView(t, new LinearLayout.LayoutParams(0, MATCH, 1f));
+        }
+        paintSegments(items, selected);
+        return box;
+    }
+
+    private void paintSegments(TextView[] items, int selected) {
+        for (int i = 0; i < items.length; i++) {
+            boolean on = i == selected;
+            items[i].setBackground(new ColorDrawable(on ? secC : 0x00000000));
+            items[i].setTextColor(on ? onSecC : onSurface);
+        }
+    }
+
+    /** A small selectable chip. */
+    TextView chip(String label, boolean selected, boolean accentOutline) {
+        TextView t = medium(label, 14, selected ? onSecC : onSurface);
+        t.setGravity(Gravity.CENTER);
+        t.setSingleLine(true);
+        t.setPadding(dp(12), 0, dp(12), 0);
+        if (selected) {
+            t.setBackground(rounded(secC, 8));
+        } else {
+            t.setBackground(outlined(0x00000000, accentOutline ? primary : outline, 8));
+        }
+        t.setMinHeight(dp(32));
+        t.setMinimumHeight(dp(32));
+        return t;
+    }
+
+    /** Text button without a background, in the accent colour. */
+    LinearLayout textButton(String label, int iconRes, View.OnClickListener l) {
+        LinearLayout b = horizontal();
+        b.setPadding(dp(10), 0, dp(10), 0);
+        b.setMinimumHeight(dp(36));
+        if (iconRes != 0) b.addView(icon(iconRes, 16, primary), lp(dp(16), dp(16), 0, 0, 5, 0));
+        b.addView(medium(label, 13, primary));
+        b.setOnClickListener(l);
+        return b;
+    }
+
+    Switch makeSwitch(boolean on, CompoundButton.OnCheckedChangeListener l) {
+        Switch s = new Switch(ctx);
+        s.setChecked(on);
+        int[][] states = new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}};
+        s.setThumbTintList(new ColorStateList(states, new int[]{onPrimary, outline}));
+        s.setTrackTintList(new ColorStateList(states, new int[]{primary, high}));
+        s.setOnCheckedChangeListener(l);
+        return s;
+    }
+
+    /** A row with a title, optional smaller line, and a switch on the right. */
+    LinearLayout switchRow(String title, String sub, boolean on, CompoundButton.OnCheckedChangeListener l) {
+        LinearLayout row = horizontal();
+        row.setMinimumHeight(dp(sub == null ? 52 : 64));
+        LinearLayout labels = vertical();
+        labels.addView(text(title, 16, onSurface));
+        if (sub != null) labels.addView(text(sub, 13, variant));
+        row.addView(labels, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        row.addView(makeSwitch(on, l), lp(WRAP, WRAP, 12, 0, 0, 0));
+        return row;
+    }
+
+    /** Round plus/minus button. Tap changes by one; hold repeats. */
+    TextView stepButton(String sign, final Runnable action) {
+        final TextView b = medium(sign, 20, onSurface);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(rounded(high, 18));
+        final Runnable[] repeat = new Runnable[1];
+        repeat[0] = new Runnable() {
+            @Override
+            public void run() {
+                action.run();
+                handler.postDelayed(repeat[0], 110L);
+            }
+        };
+        b.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                int a = e.getActionMasked();
+                if (a == MotionEvent.ACTION_DOWN) {
+                    action.run();
+                    handler.postDelayed(repeat[0], 450L);
+                    return true;
+                }
+                if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    handler.removeCallbacks(repeat[0]);
+                    return true;
+                }
+                return true;
+            }
+        });
+        return b;
+    }
+
+    // ---- colour rule: text and ring must not be the same as (or too close to) the background
+
+    static double lum(int c) {
+        double r = chan(((c >> 16) & 0xFF) / 255.0);
+        double g = chan(((c >> 8) & 0xFF) / 255.0);
+        double b = chan((c & 0xFF) / 255.0);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    private static double chan(double v) {
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    }
+
+    static boolean tooClose(int a, int b) {
+        double l1 = lum(a);
+        double l2 = lum(b);
+        double hi = Math.max(l1, l2);
+        double lo = Math.min(l1, l2);
+        return (hi + 0.05) / (lo + 0.05) < 1.8;
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_back.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,12 H5 M12,19 l-7,-7 7,-7"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_check.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M5,12 l5,5 9,-10"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_download.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,3 v12 M7,10 l5,5 5,-5 M5,21 h14"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_edit.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,20 h4 L19,9 l-4,-4 L4,16 z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_fg.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M38.879999999999995,59.04 a20.16,20.16 0 1,0 40.32,0 a20.16,20.16 0 1,0 -40.32,0"
+        android:strokeAlpha="0.28"
+        android:strokeColor="#08305F"
+        android:strokeWidth="5.88" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M33.0,53.16 a20.16,20.16 0 1,0 40.32,0 a20.16,20.16 0 1,0 -40.32,0"
+        android:strokeColor="#08305F"
+        android:strokeWidth="5.88" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M53.16,53.16 L53.16,42.24 M53.16,53.16 L60.72,57.36"
+        android:strokeColor="#08305F"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.36" />
+    <path
+        android:fillColor="#08305F"
+        android:pathData="M63.66,38.88 a3.78,3.78 0 1,0 7.56,0 a3.78,3.78 0 1,0 -7.56,0" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_gear.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,12 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_help.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M3,12 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 M9.5,9.5 a2.5,2.5 0 1 1 3.5,2.3 c-.6,.3 -1,.9 -1,1.6 M12,17 h.01"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_logo.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="36"
+    android:viewportHeight="36">
+    <path
+        android:fillColor="#A9C7FF"
+        android:pathData="M11,0 h14 a11,11 0 0 1 11,11 v14 a11,11 0 0 1 -11,11 h-14 a11,11 0 0 1 -11,-11 v-14 a11,11 0 0 1 11,-11 z" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12.0,20.5 a8.5,8.5 0 1,0 17.0,0 a8.5,8.5 0 1,0 -17.0,0"
+        android:strokeAlpha="0.28"
+        android:strokeColor="#08305F"
+        android:strokeWidth="3" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M8.5,17 a8.5,8.5 0 1,0 17.0,0 a8.5,8.5 0 1,0 -17.0,0"
+        android:strokeColor="#08305F"
+        android:strokeWidth="3" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M17,17 L17,12 M17,17 L20.5,19"
+        android:strokeColor="#08305F"
+        android:strokeLineCap="round"
+        android:strokeWidth="2" />
+    <path
+        android:fillColor="#08305F"
+        android:pathData="M21.5,10.5 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_mail.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M6,5 h12 a3,3 0 0 1 3,3 v8 a3,3 0 0 1 -3,3 h-12 a3,3 0 0 1 -3,-3 v-8 a3,3 0 0 1 3,-3 z M3,8 l9,6 9,-6"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_nav_stats.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M5,21 V11 M12,21 V4 M19,21 v-7"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_nav_style.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,3 a9,9 0 1 0 0,18 c1.2,0 2,-.8 2,-1.8 0,-.5 -.2,-.9 -.5,-1.3 -.3,-.4 -.5,-.8 -.5,-1.3 0,-1 .8,-1.6 1.8,-1.6 H17 a4,4 0 0 0 4,-4 c0,-4.4 -4,-8 -9,-8 z M6.5,11 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 M9.5,7 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 M14.5,7.5 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_nav_timer.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,13 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0 M12,9 v4 l2.5,2 M9,2 h6"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_play.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8,5 v14 l11,-7 z" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_plus.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,5 v14 M5,12 h14"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_shape_circle.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,12 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_shape_pill.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M7,7 h10 a5,5 0 0 1 5,5 v0 a5,5 0 0 1 -5,5 h-10 a5,5 0 0 1 -5,-5 v0 a5,5 0 0 1 5,-5 z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_shape_squircle.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M10,4 h4 a6,6 0 0 1 6,6 v4 a6,6 0 0 1 -6,6 h-4 a6,6 0 0 1 -6,-6 v-4 a6,6 0 0 1 6,-6 z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_shield.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,3 l8,3 v6 c0,4.5 -3.2,8 -8,9 -4.8,-1 -8,-4.5 -8,-9 V6 z M8.5,12 l2.5,2.5 4.5,-5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_stop.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7,7 h10 v10 H7 z" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/wm_main.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="119.6dp"
+    android:height="28dp"
+    android:viewportWidth="3416"
+    android:viewportHeight="800">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M1028 58 845 760H638L526 298L410 760H203L25 58H208L309 569L434 58H622L742 569L844 58ZM1326 194Q1385 194 1429.5 218Q1474 242 1498 281V202H1669V760H1498V681Q1473 720 1428.5 744Q1384 768 1325 768Q1257 768 1201 732.5Q1145 697 1112.5 631.5Q1080 566 1080 480Q1080 394 1112.5 329Q1145 264 1201 229Q1257 194 1326 194ZM1376 343Q1325 343 1289.5 379.5Q1254 416 1254 480Q1254 544 1289.5 581.5Q1325 619 1376 619Q1427 619 1462.5 582Q1498 545 1498 481Q1498 417 1462.5 380Q1427 343 1376 343ZM2104 615V760H2017Q1924 760 1872 714.5Q1820 669 1820 566V344H1752V202H1820V66H1991V202H2103V344H1991V568Q1991 593 2003 604Q2015 615 2043 615ZM2445 194Q2550 194 2620.5 249Q2691 304 2713 404H2531Q2508 340 2442 340Q2395 340 2367 376.5Q2339 413 2339 481Q2339 549 2367 585.5Q2395 622 2442 622Q2508 622 2531 558H2713Q2691 656 2620 712Q2549 768 2445 768Q2363 768 2299.5 733Q2236 698 2200.5 633Q2165 568 2165 481Q2165 394 2200.5 329Q2236 264 2299.5 229Q2363 194 2445 194ZM3359 434V760H3189V457Q3189 401 3160 370Q3131 339 3082 339Q3033 339 3004 370Q2975 401 2975 457V760H2804V20H2975V277Q3001 240 3046 218Q3091 196 3147 196Q3243 196 3301 259.5Q3359 323 3359 434Z" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/wm_u.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="23.6dp"
+    android:height="28dp"
+    android:viewportWidth="674"
+    android:viewportHeight="800">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M613 202V760H442V684Q416 721 371.5 743.5Q327 766 273 766Q209 766 160 737.5Q111 709 84 655Q57 601 57 528V202H227V505Q227 561 256 592Q285 623 334 623Q384 623 413 592Q442 561 442 505V202Z" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/mipmap-anydpi-v26'
+cat > 'app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_bg" />
+    <foreground android:drawable="@drawable/ic_fg" />
+</adaptive-icon>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/values'
+cat > 'app/src/main/res/values/strings.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Watchu</string>
+    <color name="ic_bg">#A9C7FF</color>
+</resources>
+FLOATY_EOF
+mkdir -p '.'
+cat > 'build.gradle' <<'FLOATY_EOF'
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
+FLOATY_EOF
+mkdir -p '.'
+cat > 'gradle.properties' <<'FLOATY_EOF'
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.nonTransitiveRClass=true
+FLOATY_EOF
+mkdir -p '.'
+cat > 'settings.gradle' <<'FLOATY_EOF'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "Watchu"
+include ':app'
+FLOATY_EOF
