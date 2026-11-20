@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.0'
+        versionName '1.1'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -1139,8 +1139,8 @@ public class FloatingService extends Service {
         accumulatedMs = totalMs;
         alarming = true;
         wake();
-        playSound(RingtoneManager.TYPE_ALARM, true, 30000L,
-                new long[]{0, 600, 400, 600, 400, 600, 400});
+        playSound(RingtoneManager.TYPE_NOTIFICATION, false, 4000L,
+                new long[]{0, 400, 200, 400, 200, 400});
     }
 
     private void nextPhase(boolean quiet) {
@@ -1248,7 +1248,7 @@ public class FloatingService extends Service {
 
     private void playSound(int type, boolean loop, long timeoutMs, long[] pattern) {
         stopAlarmSound();
-        boolean loud = Prefs.getInt(prefs, Prefs.LOUD) == 1;
+        boolean loud = false;
         if (Prefs.getInt(prefs, Prefs.SOUND) == 1 && soundAllowed()) {
             try {
                 Uri uri = RingtoneManager.getDefaultUri(type);
@@ -1275,9 +1275,8 @@ public class FloatingService extends Service {
         handler.postDelayed(stopSoundRunnable, timeoutMs);
     }
 
-    /** Quiet when the phone is on silent/vibrate or Do Not Disturb, unless Loud alarm is on. */
+    /** Quiet when the phone is on silent/vibrate or Do Not Disturb, . */
     private boolean soundAllowed() {
-        if (Prefs.getInt(prefs, Prefs.LOUD) == 1) return true;
         try {
             AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
             if (am != null && am.getRingerMode() != AudioManager.RINGER_MODE_NORMAL) return false;
@@ -1343,8 +1342,14 @@ class FlowLayout extends ViewGroup {
         for (int i = 0; i < getChildCount(); i++) {
             View ch = getChildAt(i);
             if (ch.getVisibility() == View.GONE) continue;
-            ch.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST),
-                    MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
+            ViewGroup.LayoutParams clp = ch.getLayoutParams();
+            int wSpec = (clp != null && clp.width > 0)
+                    ? MeasureSpec.makeMeasureSpec(clp.width, MeasureSpec.EXACTLY)
+                    : MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST);
+            int hSpec = (clp != null && clp.height > 0)
+                    ? MeasureSpec.makeMeasureSpec(clp.height, MeasureSpec.EXACTLY)
+                    : MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
+            ch.measure(wSpec, hSpec);
             int cw = ch.getMeasuredWidth();
             int chh = ch.getMeasuredHeight();
             if (x > 0 && x + cw > maxW) {
@@ -1563,6 +1568,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -1645,6 +1651,8 @@ public class MainActivity extends Activity {
     private final View[] pages = new View[3];
     private LinearLayout startBar;
     private ImageView startIcon;
+    private ImageView soundBtn;
+    private ImageView vibBtn;
     private TextView startText;
     private final View[] navPill = new View[3];
     private final ImageView[] navIcon = new ImageView[3];
@@ -1758,9 +1766,14 @@ public class MainActivity extends Activity {
         startText = ui.medium("Start floating timer", 16, ui.onPrimary);
         startBar.addView(startText, lp(WRAP, WRAP, 8, 0, 0, 0));
         startBar.setOnClickListener(v -> onStartStop());
-        FrameLayout startWrap = new FrameLayout(this);
+        LinearLayout startWrap = ui.horizontal();
+        startWrap.setGravity(Gravity.CENTER_VERTICAL);
         startWrap.setPadding(dp(16), dp(8), dp(16), dp(12));
-        startWrap.addView(startBar, new FrameLayout.LayoutParams(MATCH, dp(56)));
+        soundBtn = toggleIcon(Prefs.SOUND, R.drawable.ic_sound_on, R.drawable.ic_sound_off, "Sound");
+        vibBtn = toggleIcon(Prefs.VIBRATE, R.drawable.ic_vib_on, R.drawable.ic_vib_off, "Vibration");
+        startWrap.addView(soundBtn, lp(dp(56), dp(56), 0, 0, 10, 0));
+        startWrap.addView(vibBtn, lp(dp(56), dp(56), 0, 0, 10, 0));
+        startWrap.addView(startBar, new LinearLayout.LayoutParams(0, dp(56), 1f));
         column.addView(startWrap, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         // navigation bar
@@ -1791,6 +1804,29 @@ public class MainActivity extends Activity {
         showTab(tab);
         refreshPreview();
         updateStartBtn();
+    }
+
+    /** A square on/off button for sound or vibration, shown beside the start button. */
+    private ImageView toggleIcon(final String key, final int onRes, final int offRes, final String name) {
+        final ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        iv.setPadding(dp(16), dp(16), dp(16), dp(16));
+        iv.setContentDescription(name);
+        paintToggle(iv, key, onRes, offRes);
+        iv.setOnClickListener(v -> {
+            boolean on = Prefs.getInt(p, key) == 1;
+            p.edit().putInt(key, on ? 0 : 1).apply();
+            paintToggle(iv, key, onRes, offRes);
+            Toast.makeText(this, name + (on ? " off" : " on"), Toast.LENGTH_SHORT).show();
+        });
+        return iv;
+    }
+
+    private void paintToggle(ImageView iv, String key, int onRes, int offRes) {
+        boolean on = Prefs.getInt(p, key) == 1;
+        iv.setImageResource(on ? onRes : offRes);
+        iv.setImageTintList(ColorStateList.valueOf(on ? ui.primary : ui.variant));
+        iv.setBackground(ui.outlined(on ? ui.secC : 0x00000000, on ? ui.primary : ui.outline, 14));
     }
 
     private void showTab(int t) {
@@ -1947,17 +1983,24 @@ public class MainActivity extends Activity {
                     }));
         }
         timerBox.addView(card, lp(MATCH, WRAP, 0, 0, 0, 0));
+        if (mode == Prefs.MODE_COUNTDOWN || mode == Prefs.MODE_POMODORO) {
+            TextView hint = ui.text("Tap a number to type your own value.", 12, ui.variant);
+            hint.setGravity(Gravity.CENTER);
+            timerBox.addView(hint, lp(MATCH, WRAP, 0, 8, 0, 0));
+        }
         refreshPreview();
     }
 
     /** One row: label, minus button, fixed-width value, plus button. Every row lines up. */
-    private LinearLayout stepper(String label, final String key, final int min, final int max,
+    private LinearLayout stepper(final String label, final String key, final int min, final int max,
                                  final int step, final String unit, final int notify) {
         LinearLayout row = ui.horizontal();
         row.setMinimumHeight(dp(56));
         row.addView(ui.text(label, 16, ui.onSurface), new LinearLayout.LayoutParams(0, WRAP, 1f));
         final TextView value = ui.medium(valueText(Prefs.getInt(p, key), unit), 16, ui.onSurface);
         value.setGravity(Gravity.CENTER);
+        value.setPaintFlags(value.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
+        value.setOnClickListener(v -> askNumber(label, key, min, max, value, unit, notify));
         TextView minus = ui.stepButton("−", () -> bump(key, -step, min, max, value, unit, notify));
         TextView plus = ui.stepButton("+", () -> bump(key, step, min, max, value, unit, notify));
         row.addView(minus, new LinearLayout.LayoutParams(dp(36), dp(36)));
@@ -1968,6 +2011,36 @@ public class MainActivity extends Activity {
 
     private String valueText(int v, String unit) {
         return unit.isEmpty() ? String.valueOf(v) : v + " " + unit;
+    }
+
+    /** Lets the user type a number. It is kept inside the allowed range. */
+    private void askNumber(String label, final String key, final int min, final int max,
+                           final TextView value, final String unit, final int notify) {
+        final EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setSingleLine(true);
+        et.setText(String.valueOf(Prefs.getInt(p, key)));
+        et.setSelectAllOnFocus(true);
+        FrameLayout box = new FrameLayout(this);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(et, new FrameLayout.LayoutParams(MATCH, WRAP));
+        dialog().setTitle(label + " (" + min + " to " + max + ")").setView(box)
+                .setPositiveButton("OK", (d, which) -> {
+                    int v;
+                    try {
+                        v = Integer.parseInt(et.getText().toString().trim());
+                    } catch (Exception e) {
+                        return;
+                    }
+                    if (v < min || v > max) {
+                        v = v < min ? min : max;
+                        Toast.makeText(this, "Allowed: " + min + " to " + max, Toast.LENGTH_SHORT).show();
+                    }
+                    p.edit().putInt(key, v).apply();
+                    value.setText(valueText(v, unit));
+                    changed(notify);
+                })
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void bump(String key, int delta, int min, int max, TextView value, String unit, int notify) {
@@ -2523,13 +2596,13 @@ public class MainActivity extends Activity {
         if (FloatingService.active) {
             startText.setText("Stop floating timer");
             startText.setTextColor(ui.onSurface);
-            startBar.setBackground(ui.rounded(ui.high, 28));
+            startBar.setBackground(ui.rounded(ui.high, 14));
             startIcon.setImageResource(R.drawable.ic_stop);
             startIcon.setImageTintList(ColorStateList.valueOf(ui.onSurface));
         } else {
             startText.setText("Start floating timer");
             startText.setTextColor(ui.onPrimary);
-            startBar.setBackground(ui.rounded(ui.primary, 28));
+            startBar.setBackground(ui.rounded(ui.primary, 14));
             startIcon.setImageResource(R.drawable.ic_play);
             startIcon.setImageTintList(ColorStateList.valueOf(ui.onPrimary));
         }
@@ -2683,18 +2756,18 @@ final class Prefs {
             case BGMODE: return BGMODE_SOLID;
             case FG: return 0xFFFFFFFF;
             case ACCENT: return 0xFF7C9CFF;
-            case SOUND: return 1;
+            case SOUND: return 0;
             case VIBRATE: return 1;
             case LOUD: return 0;
             case POS_X: return -1;
             case POS_Y: return -1;
             case THEME: return THEME_AUTO;
             case LOCK: return 0;
-            case SNAP: return 1;
-            case FADE: return 1;
-            case AUTONEXT: return 1;
-            case SKIPPROMPT: return 1;
-            case CYCLES: return 1;
+            case SNAP: return 0;
+            case FADE: return 0;
+            case AUTONEXT: return 0;
+            case SKIPPROMPT: return 0;
+            case CYCLES: return 0;
             case GUIDE_SEEN: return 0;
             case TIMER_SECS: return 1;
             case SCREEN_PAUSE: return 0;
@@ -2929,9 +3002,8 @@ public class SettingsActivity extends Activity {
 
         // Alerts
         box.addView(ui.section("Alerts"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
-        toggle(box, "Sound", "Quiet on silent mode and Do Not Disturb", Prefs.SOUND);
+        toggle(box, "Sound", "A short chime. Quiet on silent mode and Do Not Disturb", Prefs.SOUND);
         toggle(box, "Vibration", null, Prefs.VIBRATE);
-        toggle(box, "Loud alarm", "Rings even on silent or Do Not Disturb", Prefs.LOUD);
 
         // Advanced
         box.addView(ui.section("Advanced"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
@@ -3733,18 +3805,83 @@ cat > 'app/src/main/res/values/strings.xml' <<'FLOATY_EOF'
     <color name="ic_bg">#A9C7FF</color>
 </resources>
 FLOATY_EOF
-mkdir -p '.'
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_sound_off.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,9.5 v5 h4 l5,4 v-13 l-5,4 z M17,9.5 l5,5 M22,9.5 l-5,5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_sound_on.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,9.5 v5 h4 l5,4 v-13 l-5,4 z M16.5,9 a4,4 0 0 1 0,6 M19.5,6.5 a8,8 0 0 1 0,11"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_vib_off.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M8,4 h8 a2,2 0 0 1 2,2 v12 a2,2 0 0 1 -2,2 h-8 a2,2 0 0 1 -2,-2 v-12 a2,2 0 0 1 2,-2 z M4,4 l16,16"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_vib_on.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M8,4 h8 a2,2 0 0 1 2,2 v12 a2,2 0 0 1 -2,2 h-8 a2,2 0 0 1 -2,-2 v-12 a2,2 0 0 1 2,-2 z M3.5,8 v8 M20.5,8 v8 M1,10.5 v3 M23,10.5 v3"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
 cat > 'build.gradle' <<'FLOATY_EOF'
 plugins {
     id 'com.android.application' version '8.5.2' apply false
 }
 FLOATY_EOF
-mkdir -p '.'
 cat > 'gradle.properties' <<'FLOATY_EOF'
 org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
 android.nonTransitiveRClass=true
 FLOATY_EOF
-mkdir -p '.'
 cat > 'settings.gradle' <<'FLOATY_EOF'
 pluginManagement {
     repositories {
