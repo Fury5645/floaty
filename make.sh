@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.5'
+        versionName '1.6'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -878,10 +878,34 @@ public class FloatingService extends Service {
         }
     };
 
+    private long lastStatE = 0L;
+    private long statAcc = 0L;
+
+    private void trackStats() {
+        long ne = SystemClock.elapsedRealtime();
+        if (lastStatE != 0L) {
+            long d = ne - lastStatE;
+            boolean counts = timerRunning && mode != Prefs.MODE_CLOCK && !alarming
+                    && !(mode == Prefs.MODE_POMODORO && phase != PHASE_WORK);
+            if (counts && d > 0L && d <= 5000L) statAcc += d;
+        }
+        lastStatE = ne;
+        if (statAcc >= 10000L) flushStats();
+    }
+
+    private void flushStats() {
+        int sec = (int) (statAcc / 1000L);
+        if (sec > 0) {
+            Stats.addSeconds(prefs, sec);
+            statAcc -= sec * 1000L;
+        }
+    }
+
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
             update();
+            trackStats();
             checkMotion();
             boolean animated = bubble != null && bubble.bgMode == Prefs.BGMODE_ANIM;
             long delay = (timerRunning || mode == Prefs.MODE_CLOCK || alarming || animated) ? 200L : 500L;
@@ -947,6 +971,7 @@ public class FloatingService extends Service {
     @Override
     public void onDestroy() {
         handler.removeCallbacks(tick);
+        flushStats();
         handler.removeCallbacks(longPress);
         handler.removeCallbacks(fadeRun);
         handler.removeCallbacks(stopSoundRunnable);
@@ -1939,6 +1964,7 @@ public class MainActivity extends Activity {
             return;
         }
         refreshPreview();
+        if (tab == 2) fillStats();
         handler.removeCallbacks(poll);
         handler.post(poll);
     }
@@ -2088,6 +2114,7 @@ public class MainActivity extends Activity {
         }
         View sw = startBar.getParent() instanceof View ? (View) startBar.getParent() : null;
         if (sw != null) sw.setVisibility(t == 2 ? View.GONE : View.VISIBLE);
+        if (t == 2) fillStats();
         topLeft.removeAllViews();
         if (t == 0) {
             ImageView logo = new ImageView(this);
@@ -2771,23 +2798,248 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ stats tab
 
+    private LinearLayout statsBox;
+
     private View buildStatsPage() {
-        LinearLayout page = ui.vertical();
-        page.setGravity(Gravity.CENTER);
-        page.setPadding(dp(32), dp(16), dp(32), dp(16));
-        ImageView ic = ui.icon(R.drawable.ic_nav_stats, 48, ui.primary);
-        page.addView(ic, lp(dp(48), dp(48), 0, 0, 0, 16));
-        TextView t = ui.medium("Stats are coming soon", 20, ui.onSurface);
-        t.setGravity(Gravity.CENTER);
-        page.addView(t);
-        TextView s = ui.text("Daily target, a 30-day graph, a calendar and your streak will appear here in the next update.",
-                15, ui.variant);
-        s.setGravity(Gravity.CENTER);
-        page.addView(s, lp(MATCH, WRAP, 0, 8, 0, 0));
-        return page;
+        ScrollView sv = new ScrollView(this);
+        statsBox = ui.vertical();
+        statsBox.setPadding(dp(16), dp(4), dp(16), dp(16));
+        sv.addView(statsBox, new FrameLayout.LayoutParams(MATCH, WRAP));
+        fillStats();
+        return sv;
     }
 
-    // ------------------------------------------------------------ preview and service
+    private TextView statLine(String big, String small, int bigColor) {
+        TextView t = ui.medium(big, 22, bigColor);
+        t.setGravity(Gravity.CENTER);
+        return t;
+    }
+
+    private void fillStats() {
+        if (statsBox == null) return;
+        statsBox.removeAllViews();
+        Stats.evaluate(p);
+        final java.util.TreeMap<Integer, Integer> m = Stats.load(p);
+        final int goalMin = Prefs.getInt(p, Prefs.GOAL_MIN);
+        final int goal = goalMin * 60;
+        final int today = Stats.secs(m, Stats.cal(0));
+        final int streak = Stats.streak(m, goal);
+        final int stars = Prefs.getInt(p, Prefs.STARS);
+        final int run = Prefs.getInt(p, Prefs.STAR_RUN);
+        final int thisWeek = Stats.sumDays(m, -6, 0);
+        final int lastWeek = Stats.sumDays(m, -13, -7);
+        final int green = 0xFF6FD3A0;
+        final int red = 0xFFE5707E;
+
+        // today and goal
+        LinearLayout c1 = card();
+        c1.setPadding(dp(16), dp(12), dp(16), dp(14));
+        LinearLayout head = ui.horizontal();
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(ui.medium("Today", 14, ui.variant), new LinearLayout.LayoutParams(0, WRAP, 1f));
+        TextView goalChip = ui.chip("Goal " + Stats.dur(goal) + "  \u25BE", false, true);
+        goalChip.setOnClickListener(v -> pickGoal(goalMin));
+        head.addView(goalChip);
+        c1.addView(head, lp(MATCH, WRAP, 0, 0, 0, 8));
+        RingView ring = new RingView(this);
+        ring.frac = goal > 0 ? today / (float) goal : 0f;
+        ring.big = Stats.dur(today);
+        ring.small = "of " + Stats.dur(goal);
+        ring.trackColor = ui.line;
+        ring.arcColor = today >= goal ? green : ui.primary;
+        ring.textColor = ui.onSurface;
+        ring.subColor = ui.variant;
+        c1.addView(ring, lp(dp(170), dp(170), 0, 0, 0, 6));
+        ((LinearLayout.LayoutParams) ring.getLayoutParams()).gravity = Gravity.CENTER_HORIZONTAL;
+        TextView msg = ui.text(today >= goal ? "Goal reached today. Nice work."
+                : Stats.dur(goal - today) + " to go", 14, today >= goal ? green : ui.variant);
+        msg.setGravity(Gravity.CENTER);
+        c1.addView(msg, lp(MATCH, WRAP, 0, 0, 0, 0));
+        statsBox.addView(c1, lp(MATCH, WRAP, 0, 0, 0, 12));
+
+        // streak and stars
+        LinearLayout c2 = card();
+        c2.setPadding(dp(16), dp(14), dp(16), dp(14));
+        LinearLayout two = ui.horizontal();
+        LinearLayout colA = ui.vertical();
+        colA.setGravity(Gravity.CENTER);
+        colA.addView(ui.text("Streak", 13, ui.variant));
+        colA.addView(ui.medium(streak + (streak == 1 ? " day" : " days"), 22, ui.onSurface));
+        LinearLayout colB = ui.vertical();
+        colB.setGravity(Gravity.CENTER);
+        colB.addView(ui.text("Stars", 13, ui.variant));
+        colB.addView(ui.medium("\u2605 " + stars, 22, 0xFFD8A67C));
+        colB.addView(ui.text(run + " of 10 days toward the next", 12, ui.variant));
+        two.addView(colA, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        two.addView(colB, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        c2.addView(two);
+        statsBox.addView(c2, lp(MATCH, WRAP, 0, 0, 0, 12));
+
+        // 30-day graph
+        LinearLayout c3 = card();
+        c3.setPadding(dp(16), dp(12), dp(16), dp(12));
+        c3.addView(ui.medium("Last 30 days", 14, ui.variant), lp(MATCH, WRAP, 0, 0, 0, 8));
+        BarsView bars = new BarsView(this);
+        bars.goalSec = goal;
+        for (int i = 0; i < 30; i++) bars.secs[i] = Stats.secs(m, Stats.cal(i - 29));
+        bars.metColor = green;
+        bars.missColor = red;
+        bars.todayColor = ui.primary;
+        bars.lineColor = ui.variant;
+        bars.textColor = ui.variant;
+        c3.addView(bars, lp(MATCH, dp(130), 0, 0, 0, 6));
+        c3.addView(ui.text("Green: goal met. Red: missed. Blue: today. Dotted line: your goal.", 12, ui.variant));
+        statsBox.addView(c3, lp(MATCH, WRAP, 0, 0, 0, 12));
+
+        // this week vs last week
+        LinearLayout c4 = card();
+        c4.setPadding(dp(16), dp(12), dp(16), dp(12));
+        c4.addView(ui.medium("This week vs last week", 14, ui.variant), lp(MATCH, WRAP, 0, 0, 0, 6));
+        boolean up = thisWeek >= lastWeek;
+        TextView wk = ui.medium((up ? "\u25B2 " : "\u25BC ") + Stats.dur(Math.abs(thisWeek - lastWeek))
+                + (up ? " more" : " less"), 20, up ? green : red);
+        c4.addView(wk);
+        c4.addView(ui.text("This week " + Stats.dur(thisWeek) + "  \u00B7  Last week " + Stats.dur(lastWeek),
+                13, ui.variant), lp(MATCH, WRAP, 0, 2, 0, 0));
+        statsBox.addView(c4, lp(MATCH, WRAP, 0, 0, 0, 12));
+
+        // month calendar
+        LinearLayout c5 = card();
+        c5.setPadding(dp(12), dp(12), dp(12), dp(12));
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        c5.addView(ui.medium(new SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(now.getTime()),
+                14, ui.variant), lp(MATCH, WRAP, 4, 0, 0, 8));
+        String[] dn = {"M", "T", "W", "T", "F", "S", "S"};
+        LinearLayout hrow = ui.horizontal();
+        for (String d : dn) {
+            TextView t = ui.text(d, 12, ui.variant);
+            t.setGravity(Gravity.CENTER);
+            hrow.addView(t, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        }
+        c5.addView(hrow, lp(MATCH, WRAP, 0, 0, 0, 4));
+        java.util.Calendar first = java.util.Calendar.getInstance();
+        first.set(java.util.Calendar.DAY_OF_MONTH, 1);
+        int lead = (first.get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7;
+        int days = now.getActualMaximum(java.util.Calendar.DAY_OF_MONTH);
+        int todayDom = now.get(java.util.Calendar.DAY_OF_MONTH);
+        int cell = 0;
+        LinearLayout row = null;
+        for (int i = 0; i < lead + days; i++) {
+            if (i % 7 == 0) {
+                row = ui.horizontal();
+                c5.addView(row, lp(MATCH, WRAP, 0, 0, 0, 4));
+            }
+            int dom = i - lead + 1;
+            TextView t = ui.text(dom >= 1 ? String.valueOf(dom) : "", 13, ui.variant);
+            t.setGravity(Gravity.CENTER);
+            if (dom >= 1) {
+                java.util.Calendar dc = java.util.Calendar.getInstance();
+                dc.set(java.util.Calendar.DAY_OF_MONTH, dom);
+                int sec = Stats.secs(m, dc);
+                if (dom < todayDom) {
+                    if (sec >= goal) {
+                        t.setBackground(ui.rounded(ui.greenC, 10));
+                        t.setTextColor(ui.onGreenC);
+                    } else {
+                        t.setBackground(ui.rounded(0x33E5707E, 10));
+                        t.setTextColor(ui.onSurface);
+                    }
+                } else if (dom == todayDom) {
+                    t.setBackground(ui.outlined(0x00000000, ui.primary, 10));
+                    t.setTextColor(ui.onSurface);
+                }
+            }
+            row.addView(t, new LinearLayout.LayoutParams(0, dp(34), 1f));
+            cell++;
+        }
+        statsBox.addView(c5, lp(MATCH, WRAP, 0, 0, 0, 12));
+
+        // share
+        LinearLayout share = ui.horizontal();
+        share.setGravity(Gravity.CENTER);
+        share.setBackground(ui.rounded(ui.primary, 14));
+        share.setPadding(dp(16), dp(14), dp(16), dp(14));
+        TextView st = ui.medium("Share report card", 16, ui.onPrimary);
+        share.addView(st);
+        share.setOnClickListener(v -> shareReport(goal, today, streak, stars, run, thisWeek, lastWeek, m));
+        statsBox.addView(share, lp(MATCH, WRAP, 0, 0, 0, 8));
+    }
+
+    private void pickGoal(final int currentMin) {
+        final int[] mins = {30, 60, 90, 120, 180, 240, 300, 360};
+        String[] labels = new String[mins.length + 1];
+        for (int i = 0; i < mins.length; i++) labels[i] = Stats.dur(mins[i] * 60);
+        labels[mins.length] = "Custom (minutes)";
+        dialog().setTitle("Daily goal").setItems(labels, (d, which) -> {
+            if (which < mins.length) {
+                confirmGoal(currentMin, mins[which]);
+            } else {
+                final android.widget.EditText et = new android.widget.EditText(this);
+                et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                et.setHint("10 to 720");
+                dialog().setTitle("Goal in minutes (10 to 720)").setView(et)
+                        .setPositiveButton("OK", (d2, w2) -> {
+                            int v;
+                            try {
+                                v = Integer.parseInt(et.getText().toString().trim());
+                            } catch (NumberFormatException e) {
+                                return;
+                            }
+                            if (v < 10) v = 10;
+                            if (v > 720) v = 720;
+                            confirmGoal(currentMin, v);
+                        }).setNegativeButton("Cancel", null).show();
+            }
+        }).setNegativeButton("Cancel", null).show();
+    }
+
+    private void confirmGoal(final int currentMin, final int newMin) {
+        if (newMin == currentMin) return;
+        dialog().setTitle("Change daily goal?")
+                .setMessage("Changing your goal restarts your stars. Your earned stars go back to 0 and counting begins again today.")
+                .setPositiveButton("Change and restart", (d, w) -> {
+                    Stats.setGoal(p, newMin);
+                    fillStats();
+                })
+                .setNegativeButton("Keep " + Stats.dur(currentMin * 60), null).show();
+    }
+
+    private void shareReport(int goal, int today, int streak, int stars, int run, int thisWeek,
+                             int lastWeek, java.util.Map<Integer, Integer> m) {
+        int[] last14 = new int[14];
+        for (int i = 0; i < 14; i++) last14[i] = Stats.secs(m, Stats.cal(i - 13));
+        String text = "My Watchu report: " + Stats.dur(today) + " of " + Stats.dur(goal) + " today, "
+                + streak + "-day streak, " + stars + " star" + (stars == 1 ? "" : "s") + ". Watchu is free for life.";
+        Intent send = new Intent(Intent.ACTION_SEND);
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                android.graphics.Bitmap bmp = ReportCard.render(goal, today, streak, stars, run, thisWeek,
+                        lastWeek, last14);
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+                        "watchu-report-" + System.currentTimeMillis() + ".png");
+                cv.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png");
+                cv.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Watchu");
+                Uri u = getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+                if (u == null) throw new java.io.IOException("no uri");
+                java.io.OutputStream os = getContentResolver().openOutputStream(u);
+                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, os);
+                os.close();
+                send.setType("image/png");
+                send.putExtra(Intent.EXTRA_STREAM, u);
+                send.putExtra(Intent.EXTRA_TEXT, text);
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } else {
+                send.setType("text/plain");
+                send.putExtra(Intent.EXTRA_TEXT, text);
+            }
+        } catch (Exception e) {
+            send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_TEXT, text);
+        }
+        startActivity(Intent.createChooser(send, "Share report card"));
+    }
 
     private void changed(int notify) {
         refreshPreview();
@@ -2981,6 +3233,11 @@ final class Prefs {
     static final String DESK_BLACK = "desk_black";
     static final String DESK_MOVE = "desk_move";
     static final String DESK_NOTICE = "desk_notice";
+    /** Stats: daily goal in minutes, stars earned, days in the current 10-day run, last day counted. */
+    static final String GOAL_MIN = "goal_min";
+    static final String STARS = "stars";
+    static final String STAR_RUN = "star_run";
+    static final String LAST_EVAL = "last_eval";
     /** Analog face: 0 Classic, 1 Minimal, 2 Wedge, 3 Ring */
     static final String AFACE = "aface";
     static final String SHAPE = "shape";
@@ -3057,6 +3314,7 @@ final class Prefs {
             case DESK_BLACK: return 0;
             case DESK_MOVE: return 0;
             case DESK_NOTICE: return 0;
+            case GOAL_MIN: return 180;
             case AFACE: return 0;
             case SHAPE: return SHAPE_CIRCLE;
             case FONT: return FONT_REGULAR;
@@ -4457,6 +4715,378 @@ cat > 'app/src/main/res/drawable/ic_desk.xml' <<'FLOATY_EOF'
         android:strokeLineJoin="round"
         android:strokeWidth="2" />
 </vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/BarsView.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.DashPathEffect;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.view.View;
+
+/** Daily bars for the last 30 days with a dotted goal line. */
+final class BarsView extends View {
+    int[] secs = new int[30];
+    int goalSec = 3600;
+    int metColor = 0xFF6FD3A0;
+    int missColor = 0xFFE5707E;
+    int todayColor = 0xFFA9C5FF;
+    int lineColor = 0xFF8C93A3;
+    int textColor = 0xFF8C93A3;
+    private final Paint pt = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF rf = new RectF();
+    private final Path path = new Path();
+
+    BarsView(Context c) {
+        super(c);
+    }
+
+    @Override
+    protected void onDraw(Canvas c) {
+        float d = getResources().getDisplayMetrics().density;
+        float w = getWidth();
+        float h = getHeight();
+        float top = 6f * d;
+        float bottom = h - 18f * d;
+        int n = secs.length;
+        int max = Math.max(goalSec, 1);
+        for (int s : secs) if (s > max) max = s;
+        float scale = (bottom - top) / (max * 1.1f);
+        float slot = w / n;
+        float bw = slot * 0.62f;
+        pt.setStyle(Paint.Style.FILL);
+        for (int i = 0; i < n; i++) {
+            int s = secs[i];
+            boolean today = i == n - 1;
+            pt.setColor(today ? todayColor : (s >= goalSec ? metColor : missColor));
+            float bh = Math.max(s * scale, s > 0 ? 2f * d : 0f);
+            if (!today && s == 0) bh = 3f * d;
+            float x = i * slot + (slot - bw) / 2f;
+            rf.set(x, bottom - bh, x + bw, bottom);
+            c.drawRoundRect(rf, bw / 3f, bw / 3f, pt);
+        }
+        float gy = bottom - goalSec * scale;
+        pt.setStyle(Paint.Style.STROKE);
+        pt.setStrokeWidth(1.5f * d);
+        pt.setColor(lineColor);
+        pt.setPathEffect(new DashPathEffect(new float[]{4f * d, 4f * d}, 0f));
+        path.rewind();
+        path.moveTo(0f, gy);
+        path.lineTo(w, gy);
+        c.drawPath(path, pt);
+        pt.setPathEffect(null);
+        pt.setStyle(Paint.Style.FILL);
+        pt.setColor(textColor);
+        pt.setTextSize(11f * d);
+        pt.setTextAlign(Paint.Align.LEFT);
+        c.drawText("30 days ago", 0f, h - 3f * d, pt);
+        pt.setTextAlign(Paint.Align.RIGHT);
+        c.drawText("Today", w, h - 3f * d, pt);
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/ReportCard.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+
+/** Draws the shareable report card picture. */
+final class ReportCard {
+    private ReportCard() {
+    }
+
+    static Bitmap render(int goalSec, int todaySec, int streak, int stars, int run, int thisWeek,
+                         int lastWeek, int[] last14) {
+        int W = 1080;
+        int H = 1350;
+        Bitmap bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        c.drawColor(0xFF101319);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFF171C25);
+        c.drawRoundRect(new RectF(40, 40, W - 40, H - 40), 48, 48, p);
+
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        p.setColor(0xFFE6E9F0);
+        p.setTextSize(64);
+        p.setTextAlign(Paint.Align.LEFT);
+        c.drawText("Watchu", 100, 150, p);
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        p.setColor(0xFF8C93A3);
+        p.setTextSize(36);
+        c.drawText("Report card", 100, 205, p);
+
+        float cx = W / 2f;
+        float cy = 470;
+        float rr = 190;
+        RectF rf = new RectF(cx - rr, cy - rr, cx + rr, cy + rr);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(36);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setColor(0x33FFFFFF);
+        c.drawOval(rf, p);
+        float frac = goalSec > 0 ? Math.min(1f, todaySec / (float) goalSec) : 0f;
+        p.setColor(todaySec >= goalSec ? 0xFF6FD3A0 : 0xFFA9C5FF);
+        if (frac > 0.003f) c.drawArc(rf, -90f, 360f * frac, false, p);
+        p.setStyle(Paint.Style.FILL);
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        p.setColor(0xFFE6E9F0);
+        p.setTextSize(84);
+        c.drawText(Stats.dur(todaySec), cx, cy + 22, p);
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        p.setColor(0xFF8C93A3);
+        p.setTextSize(36);
+        c.drawText("of " + Stats.dur(goalSec) + " today", cx, cy + 80, p);
+
+        p.setTextAlign(Paint.Align.LEFT);
+        String[] k = {"Streak", "Stars", "This week", "Last week"};
+        String[] v = {streak + (streak == 1 ? " day" : " days"), String.valueOf(stars) + "  (" + run + "/10)",
+                Stats.dur(thisWeek), Stats.dur(lastWeek)};
+        for (int i = 0; i < 4; i++) {
+            float y = 800 + i * 95;
+            p.setColor(0xFF8C93A3);
+            p.setTextSize(40);
+            p.setTextAlign(Paint.Align.LEFT);
+            c.drawText(k[i], 110, y, p);
+            p.setColor(0xFFE6E9F0);
+            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            p.setTextAlign(Paint.Align.RIGHT);
+            c.drawText(v[i], W - 110, y, p);
+            p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        }
+
+        int max = Math.max(goalSec, 1);
+        for (int s : last14) if (s > max) max = s;
+        float base = H - 130;
+        float bw = (W - 220) / 14f;
+        p.setStyle(Paint.Style.FILL);
+        for (int i = 0; i < 14; i++) {
+            int s = last14[i];
+            float bh = Math.max(8f, s / (float) max * 130f);
+            p.setColor(i == 13 ? 0xFFA9C5FF : (s >= goalSec ? 0xFF6FD3A0 : 0xFFE5707E));
+            float x = 110 + i * bw + bw * 0.15f;
+            c.drawRoundRect(new RectF(x, base - bh, x + bw * 0.7f, base), 8, 8, p);
+        }
+        p.setColor(0xFF8C93A3);
+        p.setTextSize(32);
+        p.setTextAlign(Paint.Align.CENTER);
+        c.drawText("Made with Watchu. Free for life.", cx, H - 70, p);
+        return bmp;
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/RingView.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.view.View;
+
+/** A progress ring with a big and a small line of text in the middle. */
+final class RingView extends View {
+    float frac = 0f;
+    int trackColor = 0x33FFFFFF;
+    int arcColor = 0xFFA9C5FF;
+    int textColor = 0xFFFFFFFF;
+    int subColor = 0xFF8C93A3;
+    String big = "";
+    String small = "";
+    private final Paint pt = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF rf = new RectF();
+
+    RingView(Context c) {
+        super(c);
+        pt.setTextAlign(Paint.Align.CENTER);
+    }
+
+    @Override
+    protected void onDraw(Canvas c) {
+        float w = getWidth();
+        float h = getHeight();
+        float s = Math.min(w, h);
+        float sw = s * 0.09f;
+        float cx = w / 2f;
+        float cy = h / 2f;
+        rf.set(cx - s / 2f + sw, cy - s / 2f + sw, cx + s / 2f - sw, cy + s / 2f - sw);
+        pt.setStyle(Paint.Style.STROKE);
+        pt.setStrokeWidth(sw);
+        pt.setStrokeCap(Paint.Cap.ROUND);
+        pt.setColor(trackColor);
+        c.drawOval(rf, pt);
+        if (frac > 0.003f) {
+            pt.setColor(arcColor);
+            c.drawArc(rf, -90f, 360f * Math.min(1f, frac), false, pt);
+        }
+        pt.setStyle(Paint.Style.FILL);
+        pt.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        pt.setColor(textColor);
+        float ts = s * 0.20f;
+        pt.setTextSize(ts);
+        float tw = pt.measureText(big);
+        float maxw = s * 0.62f;
+        if (tw > maxw) {
+            ts = ts * maxw / tw;
+            pt.setTextSize(ts);
+        }
+        c.drawText(big, cx, cy + ts * 0.15f, pt);
+        pt.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        pt.setColor(subColor);
+        pt.setTextSize(s * 0.085f);
+        c.drawText(small, cx, cy + ts * 0.15f + s * 0.14f, pt);
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/Stats.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.SharedPreferences;
+
+import java.util.Calendar;
+import java.util.Map;
+import java.util.TreeMap;
+
+/** Time spent on timers, one total per day, kept on this device only. */
+final class Stats {
+    static final String DATA = "stats_data";
+
+    private Stats() {
+    }
+
+    static int key(Calendar c) {
+        return c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH);
+    }
+
+    static Calendar cal(int offsetDays) {
+        Calendar c = Calendar.getInstance();
+        c.add(Calendar.DAY_OF_MONTH, offsetDays);
+        return c;
+    }
+
+    static Calendar fromKey(int k) {
+        Calendar c = Calendar.getInstance();
+        c.set(k / 10000, (k / 100) % 100 - 1, k % 100, 12, 0, 0);
+        return c;
+    }
+
+    static TreeMap<Integer, Integer> load(SharedPreferences p) {
+        TreeMap<Integer, Integer> m = new TreeMap<Integer, Integer>();
+        String raw = p.getString(DATA, "");
+        if (raw == null || raw.length() == 0) return m;
+        for (String part : raw.split(",")) {
+            int i = part.indexOf(':');
+            if (i < 1) continue;
+            try {
+                m.put(Integer.parseInt(part.substring(0, i)), Integer.parseInt(part.substring(i + 1)));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return m;
+    }
+
+    private static void save(SharedPreferences p, TreeMap<Integer, Integer> m) {
+        while (m.size() > 400) m.remove(m.firstKey());
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Integer, Integer> e : m.entrySet()) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(e.getKey()).append(':').append(e.getValue());
+        }
+        p.edit().putString(DATA, sb.toString()).apply();
+    }
+
+    /** Adds whole seconds to today's total. */
+    static void addSeconds(SharedPreferences p, int sec) {
+        if (sec <= 0) return;
+        TreeMap<Integer, Integer> m = load(p);
+        int k = key(Calendar.getInstance());
+        Integer old = m.get(k);
+        m.put(k, (old == null ? 0 : old) + sec);
+        save(p, m);
+    }
+
+    static int secs(Map<Integer, Integer> m, Calendar c) {
+        Integer v = m.get(key(c));
+        return v == null ? 0 : v;
+    }
+
+    static int sumDays(Map<Integer, Integer> m, int fromOffset, int toOffset) {
+        int t = 0;
+        for (int o = fromOffset; o <= toOffset; o++) t += secs(m, cal(o));
+        return t;
+    }
+
+    static int streak(Map<Integer, Integer> m, int goalSec) {
+        int s = 0;
+        Calendar c = cal(0);
+        if (secs(m, c) < goalSec) c.add(Calendar.DAY_OF_MONTH, -1);
+        while (secs(m, c) >= goalSec && goalSec > 0 && s < 400) {
+            s++;
+            c.add(Calendar.DAY_OF_MONTH, -1);
+        }
+        return s;
+    }
+
+    /** Counts finished days toward stars: 10 days in a row on goal earns one star. A miss restarts the 10. */
+    static void evaluate(SharedPreferences p) {
+        int yk = key(cal(-1));
+        int last = p.getInt(Prefs.LAST_EVAL, 0);
+        if (last == 0) {
+            p.edit().putInt(Prefs.LAST_EVAL, yk).apply();
+            return;
+        }
+        if (last >= yk) return;
+        int goal = Prefs.getInt(p, Prefs.GOAL_MIN) * 60;
+        TreeMap<Integer, Integer> m = load(p);
+        int stars = Prefs.getInt(p, Prefs.STARS);
+        int run = Prefs.getInt(p, Prefs.STAR_RUN);
+        Calendar c = fromKey(last);
+        c.add(Calendar.DAY_OF_MONTH, 1);
+        int guard = 0;
+        while (key(c) <= yk && guard++ < 800) {
+            if (secs(m, c) >= goal) {
+                run++;
+                if (run >= 10) {
+                    stars++;
+                    run = 0;
+                }
+            } else {
+                run = 0;
+            }
+            c.add(Calendar.DAY_OF_MONTH, 1);
+        }
+        p.edit().putInt(Prefs.STARS, stars).putInt(Prefs.STAR_RUN, run).putInt(Prefs.LAST_EVAL, yk).apply();
+    }
+
+    /** New goal: stars start again from today. */
+    static void setGoal(SharedPreferences p, int minutes) {
+        p.edit().putInt(Prefs.GOAL_MIN, minutes).putInt(Prefs.STARS, 0).putInt(Prefs.STAR_RUN, 0)
+                .putInt(Prefs.LAST_EVAL, key(cal(-1))).apply();
+    }
+
+    static String dur(int sec) {
+        int m = Math.round(sec / 60f);
+        int h = m / 60;
+        int r = m % 60;
+        if (h == 0) return r + " m";
+        if (r == 0) return h + " h";
+        return h + " h " + r + " m";
+    }
+}
 FLOATY_EOF
 cat > 'build.gradle' <<'FLOATY_EOF'
 plugins {
