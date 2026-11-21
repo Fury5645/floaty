@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.4'
+        versionName '1.5'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -71,6 +71,11 @@ cat > 'app/src/main/AndroidManifest.xml' <<'FLOATY_EOF'
 
         <activity
             android:name=".SettingsActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".DeskActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false" />
 
         <activity
@@ -743,6 +748,26 @@ public class FloatingService extends Service {
     static final String ACTION_STOP = "com.watchu.timer.STOP";
     static final String ACTION_REFRESH = "com.watchu.timer.REFRESH";
     static final String ACTION_CONFIG = "com.watchu.timer.CONFIG";
+    static final String ACTION_DESK_ON = "com.watchu.timer.DESK_ON";
+    static final String ACTION_DESK_OFF = "com.watchu.timer.DESK_OFF";
+    static final String ACTION_TOGGLE = "com.watchu.timer.TOGGLE";
+    static final String ACTION_RESET = "com.watchu.timer.RESET";
+
+    // What the bubble shows right now, published for the Desk mode screen.
+    static volatile boolean deskOpen = false;
+    static volatile String dText = "";
+    static volatile String dLabel = null;
+    static volatile float dProg = -1f;
+    static volatile float dHour = 0f;
+    static volatile float dMin = 0f;
+    static volatile float dSecA = 0f;
+    static volatile int dRing = 0;
+    static volatile int dFace = -1;
+    static volatile int dKind = 0;
+    static volatile boolean dHl = false;
+    static volatile boolean dPaused = false;
+    static volatile boolean dSecHand = false;
+    static volatile boolean dClock = false;
 
     /** True while the service (and its bubble) exists. */
     static volatile boolean active = false;
@@ -901,6 +926,20 @@ public class FloatingService extends Service {
             applyStyle();
             loadConfig();
             syncMotion();
+        } else if (ACTION_DESK_ON.equals(a)) {
+            deskOpen = true;
+            if (bubble != null) bubble.setVisibility(View.GONE);
+        } else if (ACTION_DESK_OFF.equals(a)) {
+            deskOpen = false;
+            if (bubble != null) bubble.setVisibility(View.VISIBLE);
+        } else if (ACTION_TOGGLE.equals(a)) {
+            onTap();
+        } else if (ACTION_RESET.equals(a)) {
+            if (mode != Prefs.MODE_CLOCK) {
+                stopAlarm();
+                resetState();
+                update();
+            }
         }
         return START_NOT_STICKY;
     }
@@ -923,6 +962,7 @@ public class FloatingService extends Service {
         } catch (Exception ignored) {
         }
         bubble = null;
+        deskOpen = false;
         active = false;
         super.onDestroy();
     }
@@ -1344,6 +1384,23 @@ public class FloatingService extends Service {
         }
     }
 
+    private void pub(String t, String l, float pr, int rc, boolean hl, boolean ps, int face, int kind,
+                     float hh, float mm, float ss, boolean sh) {
+        dText = t;
+        dLabel = l;
+        dProg = pr;
+        dRing = rc;
+        dHl = hl;
+        dPaused = ps;
+        dFace = face;
+        dKind = kind;
+        dHour = hh;
+        dMin = mm;
+        dSecA = ss;
+        dSecHand = sh;
+        dClock = mode == Prefs.MODE_CLOCK;
+    }
+
     private void update() {
         if (bubble == null) return;
         long now = SystemClock.elapsedRealtime();
@@ -1360,6 +1417,7 @@ public class FloatingService extends Service {
                 float sec = cal.get(Calendar.SECOND) + cal.get(Calendar.MILLISECOND) / 1000f;
                 float min = cal.get(Calendar.MINUTE) + sec / 60f;
                 float hr = (cal.get(Calendar.HOUR) % 12) + min / 60f;
+                pub("", null, -1f, 0, false, false, face, 0, hr * 30f, min * 6f, sec * 6f, clockSec);
                 bubble.setPaused(false);
                 bubble.setDial(face, 0, -1f, hr * 30f, min * 6f, sec * 6f, clockSec, null, null, 0, false);
                 return;
@@ -1416,6 +1474,10 @@ public class FloatingService extends Service {
 
         boolean flash = alarming && ((now / 500L) % 2L == 0L);
         bubble.setPaused(mode != Prefs.MODE_CLOCK && !timerRunning && !alarming && prog >= 0f);
+        boolean isPaused = mode != Prefs.MODE_CLOCK && !timerRunning && !alarming && prog >= 0f;
+        boolean analogLook = Prefs.getInt(prefs, Prefs.LOOK) == 1;
+        pub(text, lbl, prog, ringOverride, flash, isPaused, analogLook ? Prefs.getInt(prefs, Prefs.AFACE) : -1,
+                mode == Prefs.MODE_STOPWATCH ? 2 : 1, 0f, 0f, 0f, false);
         if (Prefs.getInt(prefs, Prefs.LOOK) == 1) {
             bubble.setDial(Prefs.getInt(prefs, Prefs.AFACE), mode == Prefs.MODE_STOPWATCH ? 2 : 1,
                     prog < 0f ? 0f : prog, 0f, 0f, 0f, false, text, lbl, ringOverride, flash);
@@ -1922,6 +1984,11 @@ public class MainActivity extends Activity {
         top.setPadding(dp(16), dp(6), dp(8), dp(6));
         topLeft = ui.horizontal();
         top.addView(topLeft, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        ImageView desk = ui.icon(R.drawable.ic_desk, 24, ui.variant);
+        desk.setPadding(dp(8), dp(8), dp(8), dp(8));
+        desk.setContentDescription("Desk mode");
+        desk.setOnClickListener(v -> openDesk());
+        top.addView(desk, new LinearLayout.LayoutParams(dp(44), dp(44)));
         ImageView gear = ui.icon(R.drawable.ic_gear, 24, ui.variant);
         gear.setPadding(dp(8), dp(8), dp(8), dp(8));
         gear.setContentDescription("Settings");
@@ -2809,6 +2876,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void openDesk() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Turn on \"Display over other apps\" for Watchu, then come back.",
+                    Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        if (Prefs.getInt(p, Prefs.DESK_NOTICE) == 1) {
+            startActivity(new Intent(this, DeskActivity.class));
+            return;
+        }
+        LinearLayout box = ui.vertical();
+        box.setPadding(dp(22), dp(8), dp(22), dp(0));
+        box.addView(ui.text("Desk mode keeps your screen on, which uses battery. "
+                + "Plug in your charger if you will leave it running for long.", 15, ui.onSurface));
+        final android.widget.CheckBox again = new android.widget.CheckBox(this);
+        again.setText("Don't remind me again");
+        again.setTextColor(ui.variant);
+        box.addView(again, lp(WRAP, WRAP, 0, 10, 0, 0));
+        dialog().setTitle("Before you start").setView(box)
+                .setPositiveButton("Start desk mode", (d, which) -> {
+                    if (again.isChecked()) p.edit().putInt(Prefs.DESK_NOTICE, 1).apply();
+                    startActivity(new Intent(this, DeskActivity.class));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void onStartStop() {
         if (FloatingService.active) {
             sendToService(FloatingService.ACTION_STOP);
@@ -2880,6 +2976,11 @@ final class Prefs {
     static final String CLOCK_FACE = "clock_face";
     /** 0 digital, 1 analog */
     static final String LOOK = "look";
+    /** Desk mode: brightness 0 very dim, 1 dim, 2 normal */
+    static final String DESK_BRIGHT = "desk_bright";
+    static final String DESK_BLACK = "desk_black";
+    static final String DESK_MOVE = "desk_move";
+    static final String DESK_NOTICE = "desk_notice";
     /** Analog face: 0 Classic, 1 Minimal, 2 Wedge, 3 Ring */
     static final String AFACE = "aface";
     static final String SHAPE = "shape";
@@ -2952,6 +3053,10 @@ final class Prefs {
             case CLOCK_SEC: return 0;
             case CLOCK_FACE: return FACE_DIGITAL;
             case LOOK: return 0;
+            case DESK_BRIGHT: return 1;
+            case DESK_BLACK: return 0;
+            case DESK_MOVE: return 0;
+            case DESK_NOTICE: return 0;
             case AFACE: return 0;
             case SHAPE: return SHAPE_CIRCLE;
             case FONT: return FONT_REGULAR;
@@ -3216,6 +3321,16 @@ public class SettingsActivity extends Activity {
         c = card(box);
         toggle(c, "Sound", "A short chime. Quiet on silent mode and Do Not Disturb", Prefs.SOUND);
         toggle(c, "Vibration", null, Prefs.VIBRATE);
+
+        // Desk mode
+        box.addView(ui.section("Desk mode"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
+        c = card(box);
+        c.addView(ui.text("Brightness", 16, ui.onSurface), ui.lp(MATCH, WRAP, 0, 6, 0, 8));
+        c.addView(ui.segmented(new String[]{"Very dim", "Dim", "Normal"}, Prefs.getInt(p, Prefs.DESK_BRIGHT),
+                v -> p.edit().putInt(Prefs.DESK_BRIGHT, v).apply()), ui.lp(MATCH, ui.dp(40), 0, 0, 0, 6));
+        toggle(c, "Pure black background", "For AMOLED phones. Off gives a very dark grey.", Prefs.DESK_BLACK);
+        toggle(c, "Slowly move the clock",
+                "Shifts it a little every minute to protect AMOLED phones from burn-in.", Prefs.DESK_MOVE);
 
         // Advanced
         box.addView(ui.section("Advanced"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
@@ -4089,6 +4204,254 @@ cat > 'app/src/main/res/drawable/ic_vib_on.xml' <<'FLOATY_EOF'
     <path
         android:fillColor="#00000000"
         android:pathData="M8,4 h8 a2,2 0 0 1 2,2 v12 a2,2 0 0 1 -2,2 h-8 a2,2 0 0 1 -2,-2 v-12 a2,2 0 0 1 2,-2 z M3.5,8 v8 M20.5,8 v8 M1,10.5 v3 M23,10.5 v3"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/DeskActivity.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.Configuration;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.DisplayMetrics;
+import android.view.Gravity;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+/** Full-screen desk clock: a big copy of the bubble on a dark screen that stays on. */
+public class DeskActivity extends Activity {
+    private static final float[] LEVELS = {0.03f, 0.12f, 0.35f, 0.7f, 1f};
+
+    private SharedPreferences p;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private BubbleView bv;
+    private LinearLayout bar;
+    private TextView toggleBtn;
+    private TextView resetBtn;
+    private FrameLayout root;
+    private int level;
+    private long moveStep = -1L;
+
+    private final Runnable hideBar = new Runnable() {
+        @Override
+        public void run() {
+            bar.setVisibility(View.GONE);
+        }
+    };
+
+    private final Runnable poll = new Runnable() {
+        @Override
+        public void run() {
+            show();
+            handler.postDelayed(this, 200L);
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        p = Prefs.get(this);
+        Window w = getWindow();
+        w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        root = new FrameLayout(this);
+        root.setBackgroundColor(Prefs.getInt(p, Prefs.DESK_BLACK) == 1 ? Color.BLACK : 0xFF0A0C10);
+
+        bv = new BubbleView(this);
+        root.addView(bv, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+
+        bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER);
+        bar.setBackgroundColor(0xCC000000);
+        int pad = dp(10);
+        bar.setPadding(pad, pad, pad, pad + dp(8));
+        toggleBtn = button("Pause", v -> command(FloatingService.ACTION_TOGGLE));
+        resetBtn = button("Reset", v -> command(FloatingService.ACTION_RESET));
+        bar.addView(toggleBtn);
+        bar.addView(resetBtn);
+        bar.addView(button("Dimmer", v -> bright(-1)));
+        bar.addView(button("Brighter", v -> bright(1)));
+        bar.addView(button("Exit", v -> finish()));
+        root.addView(bar, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        bar.setVisibility(View.GONE);
+
+        root.setOnClickListener(v -> {
+            if (bar.getVisibility() == View.VISIBLE) {
+                bar.setVisibility(View.GONE);
+                handler.removeCallbacks(hideBar);
+            } else {
+                bar.setVisibility(View.VISIBLE);
+                handler.removeCallbacks(hideBar);
+                handler.postDelayed(hideBar, 4000L);
+            }
+        });
+        setContentView(root);
+
+        int pref = Prefs.getInt(p, Prefs.DESK_BRIGHT);
+        level = pref == 0 ? 0 : (pref == 1 ? 1 : 3);
+        applyBrightness();
+    }
+
+    private int dp(float v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    private TextView button(String label, View.OnClickListener l) {
+        TextView t = new TextView(this);
+        t.setText(label);
+        t.setTextSize(15f);
+        t.setTextColor(0xFFE6E9F0);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(14), dp(12), dp(14), dp(12));
+        t.setOnClickListener(v -> {
+            l.onClick(v);
+            if (bar.getVisibility() == View.VISIBLE) {
+                handler.removeCallbacks(hideBar);
+                handler.postDelayed(hideBar, 4000L);
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private void bright(int d) {
+        level = Math.max(0, Math.min(LEVELS.length - 1, level + d));
+        applyBrightness();
+    }
+
+    private void applyBrightness() {
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = LEVELS[level];
+        getWindow().setAttributes(lp);
+    }
+
+    private void command(String action) {
+        Intent i = new Intent(this, FloatingService.class);
+        i.setAction(action);
+        startService(i);
+    }
+
+    private void immersive() {
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        Intent i = new Intent(this, FloatingService.class);
+        i.setAction(FloatingService.ACTION_DESK_ON);
+        if (FloatingService.active) {
+            startService(i);
+        } else {
+            startForegroundService(i);
+        }
+        immersive();
+        bv.applyPrefs(p);
+        fit();
+        handler.post(poll);
+    }
+
+    @Override
+    protected void onStop() {
+        handler.removeCallbacks(poll);
+        handler.removeCallbacks(hideBar);
+        if (FloatingService.active) command(FloatingService.ACTION_DESK_OFF);
+        super.onStop();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) immersive();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        fit();
+    }
+
+    /** Make the clock as large as the screen allows. */
+    private void fit() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float wDp = dm.widthPixels / dm.density;
+        float hDp = dm.heightPixels / dm.density;
+        boolean pill = Prefs.getInt(p, Prefs.SHAPE) == Prefs.SHAPE_PILL;
+        float wf = pill ? 1.7f : 1f;
+        float hf = pill ? 0.7f : 1f;
+        float s = Math.min(hDp * 0.72f / hf, wDp * 0.88f / wf);
+        bv.sizeDp = Math.round(Math.min(s, 900f));
+        bv.requestLayout();
+        bv.invalidate();
+    }
+
+    private void show() {
+        if (!FloatingService.active) {
+            bv.setPaused(false);
+            bv.setState("--:--", null, -1f, 0, false);
+            return;
+        }
+        boolean clock = FloatingService.dClock;
+        resetBtn.setVisibility(clock ? View.GONE : View.VISIBLE);
+        toggleBtn.setVisibility(clock ? View.GONE : View.VISIBLE);
+        toggleBtn.setText(FloatingService.dPaused || FloatingService.dLabel != null
+                && FloatingService.dLabel.startsWith("TAP") ? "Start" : "Pause");
+        bv.setPaused(FloatingService.dPaused);
+        int face = FloatingService.dFace;
+        if (face >= 0) {
+            bv.setDial(face, FloatingService.dKind, FloatingService.dProg, FloatingService.dHour,
+                    FloatingService.dMin, FloatingService.dSecA, FloatingService.dSecHand,
+                    FloatingService.dText, FloatingService.dLabel, FloatingService.dRing, FloatingService.dHl);
+        } else {
+            bv.setState(FloatingService.dText, FloatingService.dLabel, FloatingService.dProg,
+                    FloatingService.dRing, FloatingService.dHl);
+        }
+        if (Prefs.getInt(p, Prefs.DESK_MOVE) == 1) {
+            long step = System.currentTimeMillis() / 60000L;
+            if (step != moveStep) {
+                moveStep = step;
+                float[][] spots = {{0, 0}, {-1, -0.6f}, {1, 0.5f}, {-0.6f, 1}, {0.7f, -1}, {1, 1}, {-1, 0.2f}};
+                float[] sp = spots[(int) (step % spots.length)];
+                float rx = Math.max(0f, root.getWidth() - bv.getWidth()) / 2f * 0.9f;
+                float ry = Math.max(0f, root.getHeight() - bv.getHeight()) / 2f * 0.9f;
+                bv.animate().translationX(sp[0] * rx).translationY(sp[1] * ry).setDuration(2500L).start();
+            }
+        }
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_desk.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M5,4 h14 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z M9,21 h6 M12,17 v4"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
