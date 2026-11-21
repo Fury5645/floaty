@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.6'
+        versionName '1.7'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -1671,11 +1671,11 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** Four-step quick guide shown on first launch and from Settings. */
+/** Seven-step quick guide shown on first launch and from Settings. */
 public class GuideActivity extends Activity {
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
-    private static final int STEPS = 4;
+    private static final int STEPS = 7;
 
     private SharedPreferences p;
     private Ui ui;
@@ -1751,7 +1751,7 @@ public class GuideActivity extends Activity {
         art.removeAllViews();
         if (step == 0) {
             title.setText("Allow floating");
-            body.setText("Android asks once. Turn on \"Display over other apps\" so the timer can sit above "
+            body.setText("Android asks once. Turn on \"Display over other apps\" so the timer can float over "
                     + "your other apps. Watchu collects no data and has no internet access.");
             LinearLayout row = ui.horizontal();
             row.setBackground(ui.rounded(ui.high, 20));
@@ -1765,25 +1765,39 @@ public class GuideActivity extends Activity {
             row.addView(sw);
             art.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
         } else if (step == 1) {
-            title.setText("Start your timer");
-            body.setText("Pick Timer, Stopwatch, Pomodoro or Clock, then tap Start floating timer. "
-                    + "The bubble stays on top while you use other apps.");
+            title.setText("Pick a mode");
+            body.setText("Use the tabs at the top of the Timer screen. Choose what you need and the "
+                    + "settings below change to match.");
+            addGesture("Timer", "counts down");
+            addGesture("Stopwatch", "counts up");
+            addGesture("Pomodoro", "focus, then break");
+            addGesture("Clock", "shows the time");
+        } else if (step == 2) {
+            title.setText("Set your time");
+            body.setText("Tap a number and type your own value. Or tap a preset to load it in one tap.");
+            addGesture("Tap a number", "type your own");
+            addGesture("Tap a preset", "load it");
+            addGesture("+ Save", "keep your own preset");
+        } else if (step == 3) {
+            title.setText("Start the bubble");
+            body.setText("Tap Start floating timer. The bubble stays on top while you use other apps. "
+                    + "The two small icons beside Start turn sound and vibration on or off.");
             BubbleView bv = new BubbleView(this);
             bv.applyPrefs(p);
             bv.setState("25:00", "FOCUS 1/4", 0.65f, 0, false);
             art.addView(bv, new LinearLayout.LayoutParams(WRAP, WRAP));
-        } else if (step == 2) {
+        } else if (step == 4) {
             title.setText("Control the bubble");
             body.setText("Everything works right on the bubble. In Pomodoro, tap it while it says "
-                    + "\"Skip break?\" to jump straight back to focus.");
+                    + "\"Skip break?\" to jump back to focus.");
             addGesture("Tap", "pause or resume");
             addGesture("Hold", "reset");
             addGesture("Drag", "move it anywhere");
-            addGesture("Drop on ✕", "close it");
-        } else {
+            addGesture("Drop on \u2715", "close it");
+        } else if (step == 5) {
             title.setText("Make it yours");
-            body.setText("Change colours, shape and size in Style. Save your own presets on the Timer tab. "
-                    + "Watchu is free for life.");
+            body.setText("Open the Style tab. Choose Digital or Analog, then pick colours, shape and size. "
+                    + "You see the result live.");
             LinearLayout dotsRow = ui.horizontal();
             int[][] cols = {{0xFF14161C, 0xFF14161C, 0xFF7C9CFF}, {0xFFFF7A59, 0xFFB5179E, 0xFFFFE066},
                     {0xFF0F9B8E, 0xFF5B2A86, 0xFFB6F7E4}, {0xFF0C2233, 0xFF0E5A7E, 0xFF4DD0E1}};
@@ -1798,6 +1812,14 @@ public class GuideActivity extends Activity {
                 dotsRow.addView(v, ui.lp(ui.dp(44), ui.dp(44), 6, 0, 6, 0));
             }
             art.addView(dotsRow, new LinearLayout.LayoutParams(WRAP, WRAP));
+        } else {
+            title.setText("Goals and Desk mode");
+            body.setText("Stats shows today against your daily goal, your streak and stars. "
+                    + "Desk mode turns your screen into a big desk clock. Plug in a charger for long use. "
+                    + "Watchu is free for life.");
+            addGesture("Stats tab", "goal, streak, stars");
+            addGesture("1 star", "every 10 days on goal");
+            addGesture("Desk mode", "big clock, screen stays on");
         }
         dots.removeAllViews();
         for (int i = 0; i < STEPS; i++) {
@@ -2010,11 +2032,6 @@ public class MainActivity extends Activity {
         top.setPadding(dp(16), dp(6), dp(8), dp(6));
         topLeft = ui.horizontal();
         top.addView(topLeft, new LinearLayout.LayoutParams(0, WRAP, 1f));
-        ImageView desk = ui.icon(R.drawable.ic_desk, 24, ui.variant);
-        desk.setPadding(dp(8), dp(8), dp(8), dp(8));
-        desk.setContentDescription("Desk mode");
-        desk.setOnClickListener(v -> openDesk());
-        top.addView(desk, new LinearLayout.LayoutParams(dp(44), dp(44)));
         ImageView gear = ui.icon(R.drawable.ic_gear, 24, ui.variant);
         gear.setPadding(dp(8), dp(8), dp(8), dp(8));
         gear.setContentDescription("Settings");
@@ -2242,6 +2259,18 @@ public class MainActivity extends Activity {
             hint.setGravity(Gravity.CENTER);
             timerBox.addView(hint, lp(MATCH, WRAP, 0, 8, 0, 0));
         }
+        LinearLayout deskRow = ui.horizontal();
+        deskRow.setGravity(Gravity.CENTER_VERTICAL);
+        deskRow.setBackground(ui.outlined(ui.container, ui.line, 20));
+        deskRow.setPadding(dp(16), dp(14), dp(16), dp(14));
+        deskRow.addView(ui.icon(R.drawable.ic_desk, 24, ui.primary), lp(dp(24), dp(24), 0, 0, 14, 0));
+        LinearLayout deskTxt = ui.vertical();
+        deskTxt.addView(ui.medium("Desk mode", 16, ui.onSurface));
+        deskTxt.addView(ui.text("Use this screen as a big desk clock", 13, ui.variant));
+        deskRow.addView(deskTxt, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        deskRow.addView(ui.medium("Open", 14, ui.primary));
+        deskRow.setOnClickListener(v -> openDesk());
+        timerBox.addView(deskRow, lp(MATCH, WRAP, 0, 14, 0, 0));
         refreshPreview();
     }
 
@@ -3602,7 +3631,7 @@ public class SettingsActivity extends Activity {
         // Help
         box.addView(ui.section("Help"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
         c = card(box);
-        c.addView(linkRow(R.drawable.ic_help, "Quick guide", "Replay the four-step tutorial",
+        c.addView(linkRow(R.drawable.ic_help, "Quick guide", "Replay the step-by-step tutorial",
                 v -> startActivity(new Intent(this, GuideActivity.class))));
         c.addView(linkRow(R.drawable.ic_download, "Check for updates",
                 "Opens the download page in your browser. You have version " + versionText() + ".",
