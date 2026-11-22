@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.7'
+        versionName '1.8'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -182,6 +182,43 @@ class BubbleView extends View {
         invalidate();
     }
 
+    float skipAlpha = 0f;
+
+    void setSkip(float a) {
+        skipAlpha = a;
+    }
+
+    @Override
+    protected void onDraw(Canvas c) {
+        drawAll(c);
+        if (skipAlpha > 0.01f) drawSkip(c);
+    }
+
+    /** Small round "skip break" badge on the right side of the bubble. */
+    private void drawSkip(Canvas c) {
+        float w = getWidth();
+        float h = getHeight();
+        float rad = Math.min(w, h) * 0.14f;
+        float cx = w - rad - density * 3f;
+        float cy = h / 2f;
+        int a = Math.round(255f * Math.min(1f, skipAlpha));
+        int col = ringColor != 0 ? ringColor : accent;
+        fill.setShader(null);
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(withAlpha(col, a));
+        c.drawCircle(cx, cy, rad, fill);
+        fill.setColor(withAlpha(bg, a));
+        android.graphics.Path tri = new android.graphics.Path();
+        tri.moveTo(cx - rad * 0.40f, cy - rad * 0.42f);
+        tri.lineTo(cx - rad * 0.40f, cy + rad * 0.42f);
+        tri.lineTo(cx + rad * 0.22f, cy);
+        tri.close();
+        c.drawPath(tri, fill);
+        c.drawRoundRect(cx + rad * 0.30f, cy - rad * 0.42f, cx + rad * 0.46f, cy + rad * 0.42f,
+                rad * 0.06f, rad * 0.06f, fill);
+        postInvalidateDelayed(120L);
+    }
+
     void setPaused(boolean v) {
         paused = v;
     }
@@ -276,7 +313,7 @@ class BubbleView extends View {
     }
 
     @Override
-    protected void onDraw(Canvas c) {
+    private void drawAll(Canvas c) {
         float w = getWidth();
         float h = getHeight();
         if (w <= 0f || h <= 0f) return;
@@ -752,6 +789,8 @@ public class FloatingService extends Service {
     static final String ACTION_DESK_OFF = "com.watchu.timer.DESK_OFF";
     static final String ACTION_TOGGLE = "com.watchu.timer.TOGGLE";
     static final String ACTION_RESET = "com.watchu.timer.RESET";
+    static final String ACTION_SKIP = "com.watchu.timer.SKIP";
+    static volatile boolean dBreak = false;
 
     // What the bubble shows right now, published for the Desk mode screen.
     static volatile boolean deskOpen = false;
@@ -806,6 +845,10 @@ public class FloatingService extends Service {
     private boolean alarming;
     private int cycle = 1;
     private long promptUntil;
+    /** Skip-break badge on the bubble is shown until this time. */
+    private long skipUntil;
+    /** A second long press before this time resets the whole Pomodoro. */
+    private long resetArmUntil;
     private boolean waitingStart;
     private boolean dragCancelled;
     private boolean screenPaused;
@@ -959,11 +1002,9 @@ public class FloatingService extends Service {
         } else if (ACTION_TOGGLE.equals(a)) {
             onTap();
         } else if (ACTION_RESET.equals(a)) {
-            if (mode != Prefs.MODE_CLOCK) {
-                stopAlarm();
-                resetState();
-                update();
-            }
+            onLongPress();
+        } else if (ACTION_SKIP.equals(a)) {
+            skipBreak();
         }
         return START_NOT_STICKY;
     }
@@ -1108,7 +1149,7 @@ public class FloatingService extends Service {
                             finishDrag();
                         }
                     } else if (!longPressed && !dragCancelled && action == MotionEvent.ACTION_UP) {
-                        onTap();
+                        onTapAt(e.getX());
                     }
                     return true;
                 }
@@ -1262,6 +1303,8 @@ public class FloatingService extends Service {
         round = 1;
         cycle = 1;
         promptUntil = 0L;
+        skipUntil = 0L;
+        resetArmUntil = 0L;
         waitingStart = false;
         if (mode == Prefs.MODE_COUNTDOWN) {
             long ms = (Prefs.getInt(prefs, Prefs.CD_MIN) * 60L + Prefs.getInt(prefs, Prefs.CD_SEC)) * 1000L;
@@ -1327,6 +1370,7 @@ public class FloatingService extends Service {
     }
 
     private void toggleRun() {
+        resetArmUntil = 0L;
         screenPaused = false;
         motionPaused = false;
         long now = SystemClock.elapsedRealtime();
@@ -1359,14 +1403,56 @@ public class FloatingService extends Service {
         if (mode != Prefs.MODE_CLOCK) toggleRun();
     }
 
+    private void onTapAt(float x) {
+        if (!alarming && mode == Prefs.MODE_POMODORO && phase != PHASE_WORK && bubble != null
+                && SystemClock.elapsedRealtime() < skipUntil && x >= bubble.getWidth() * 0.60f) {
+            skipBreak();
+            return;
+        }
+        onTap();
+    }
+
+    private void skipBreak() {
+        if (mode != Prefs.MODE_POMODORO || phase == PHASE_WORK) return;
+        stopAlarm();
+        nextPhase(true);
+        timerRunning = true;
+        waitingStart = false;
+        update();
+    }
+
     private void onLongPress() {
         if (mode == Prefs.MODE_CLOCK) return;
         stopAlarm();
-        resetState();
+        long now = SystemClock.elapsedRealtime();
+        boolean fullReset = true;
+        if (mode == Prefs.MODE_POMODORO) {
+            if (now < resetArmUntil) {
+                resetState();
+            } else {
+                // First press: only restart the step you are in (round and cycle stay).
+                screenPaused = false;
+                motionPaused = false;
+                accumulatedMs = 0L;
+                timerRunning = false;
+                alarming = false;
+                waitingStart = false;
+                promptUntil = 0L;
+                totalMs = phaseMs(phase);
+                resetArmUntil = now + 5000L;
+                fullReset = false;
+            }
+        } else {
+            resetState();
+        }
         update();
         if (vibrator != null && vibrator.hasVibrator()) {
             try {
-                vibrator.vibrate(VibrationEffect.createOneShot(40L, VibrationEffect.DEFAULT_AMPLITUDE));
+                if (fullReset) {
+                    vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 40, 70, 40}, -1));
+                } else {
+                    vibrator.vibrate(VibrationEffect.createOneShot(40L, VibrationEffect.DEFAULT_AMPLITUDE));
+                }
             } catch (Exception ignored) {
             }
         }
@@ -1396,6 +1482,8 @@ public class FloatingService extends Service {
         totalMs = phaseMs(phase);
         accumulatedMs = 0L;
         baseElapsed = now;
+        skipUntil = phase != PHASE_WORK ? now + 10000L : 0L;
+        resetArmUntil = 0L;
         boolean auto = Prefs.getInt(prefs, Prefs.AUTONEXT) == 1;
         timerRunning = auto;
         waitingStart = !auto;
@@ -1498,6 +1586,10 @@ public class FloatingService extends Service {
         }
 
         boolean flash = alarming && ((now / 500L) % 2L == 0L);
+        if (mode == Prefs.MODE_POMODORO && now < resetArmUntil) lbl = "HOLD AGAIN: RESET ALL";
+        long skipLeft = (mode == Prefs.MODE_POMODORO && phase != PHASE_WORK && !alarming) ? skipUntil - now : 0L;
+        bubble.setSkip(skipLeft > 0L ? Math.min(1f, skipLeft / 1500f) : 0f);
+        dBreak = mode == Prefs.MODE_POMODORO && phase != PHASE_WORK;
         bubble.setPaused(mode != Prefs.MODE_CLOCK && !timerRunning && !alarming && prog >= 0f);
         boolean isPaused = mode != Prefs.MODE_CLOCK && !timerRunning && !alarming && prog >= 0f;
         boolean analogLook = Prefs.getInt(prefs, Prefs.LOOK) == 1;
@@ -4528,6 +4620,7 @@ public class DeskActivity extends Activity {
     private LinearLayout bar;
     private TextView toggleBtn;
     private TextView resetBtn;
+    private TextView skipBtn;
     private FrameLayout root;
     private int level;
     private long moveStep = -1L;
@@ -4571,6 +4664,8 @@ public class DeskActivity extends Activity {
         resetBtn = button("Reset", v -> command(FloatingService.ACTION_RESET));
         bar.addView(toggleBtn);
         bar.addView(resetBtn);
+        skipBtn = button("Skip break", v -> command(FloatingService.ACTION_SKIP));
+        bar.addView(skipBtn);
         bar.addView(button("Dimmer", v -> bright(-1)));
         bar.addView(button("Brighter", v -> bright(1)));
         bar.addView(button("Exit", v -> finish()));
@@ -4702,6 +4797,7 @@ public class DeskActivity extends Activity {
         boolean clock = FloatingService.dClock;
         resetBtn.setVisibility(clock ? View.GONE : View.VISIBLE);
         toggleBtn.setVisibility(clock ? View.GONE : View.VISIBLE);
+        skipBtn.setVisibility(FloatingService.dBreak ? View.VISIBLE : View.GONE);
         toggleBtn.setText(FloatingService.dPaused || FloatingService.dLabel != null
                 && FloatingService.dLabel.startsWith("TAP") ? "Start" : "Pause");
         bv.setPaused(FloatingService.dPaused);
