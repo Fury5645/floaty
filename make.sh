@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.8'
+        versionName '1.11'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -77,6 +77,12 @@ cat > 'app/src/main/AndroidManifest.xml' <<'FLOATY_EOF'
             android:name=".DeskActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false" />
+
+        <activity
+            android:name=".QuickStartActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.NoDisplay" />
 
         <activity
             android:name=".GuideActivity"
@@ -789,6 +795,7 @@ public class FloatingService extends Service {
     static final String ACTION_TOGGLE = "com.watchu.timer.TOGGLE";
     static final String ACTION_RESET = "com.watchu.timer.RESET";
     static final String ACTION_SKIP = "com.watchu.timer.SKIP";
+    static final String ACTION_QUICK = "com.watchu.timer.QUICK";
     static volatile boolean dBreak = false;
 
     // What the bubble shows right now, published for the Desk mode screen.
@@ -948,6 +955,7 @@ public class FloatingService extends Service {
         public void run() {
             update();
             trackStats();
+            refreshNotification();
             checkMotion();
             boolean animated = bubble != null && bubble.bgMode == Prefs.BGMODE_ANIM;
             long delay = (timerRunning || mode == Prefs.MODE_CLOCK || alarming || animated) ? 200L : 500L;
@@ -1004,6 +1012,14 @@ public class FloatingService extends Service {
             onLongPress();
         } else if (ACTION_SKIP.equals(a)) {
             skipBreak();
+        } else if (ACTION_QUICK.equals(a)) {
+            applyStyle();
+            loadConfig();
+            syncMotion();
+            stopAlarm();
+            resetState();
+            if (mode != Prefs.MODE_CLOCK && !timerRunning) toggleRun();
+            update();
         }
         return START_NOT_STICKY;
     }
@@ -1034,31 +1050,102 @@ public class FloatingService extends Service {
 
     // ------------------------------------------------------------ foreground notification
 
+    private String notifSig = "";
+    private long notifCheckAt = 0L;
+    private int todayBase = 0;
+    private int examCache = -1;
+
+    private PendingIntent actionPi(int code, String action) {
+        Intent i = new Intent(this, FloatingService.class);
+        i.setAction(action);
+        return PendingIntent.getService(this, code, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    private Notification buildNotification() {
+        long now = SystemClock.elapsedRealtime();
+        PendingIntent openPi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        boolean clock = mode == Prefs.MODE_CLOCK;
+        String title;
+        if (alarming) {
+            title = "Time's up";
+        } else if (mode == Prefs.MODE_POMODORO) {
+            title = phase == PHASE_WORK ? "Focus " + round + "/" + roundsBeforeLong
+                    : (phase == PHASE_SHORT ? "Break" : "Long break");
+        } else if (mode == Prefs.MODE_STOPWATCH) {
+            title = "Stopwatch";
+        } else if (clock) {
+            title = "Clock";
+        } else {
+            title = "Timer";
+        }
+        boolean live = !clock && timerRunning && !alarming;
+        if (!clock && !timerRunning && !alarming) title += " \u00B7 paused";
+        int goal = Prefs.getInt(prefs, Prefs.GOAL_MIN) * 60;
+        int today = todayBase + (int) (statAcc / 1000L);
+        String line = "Today " + Stats.dur(today) + " of " + Stats.dur(goal);
+        String exam = examCache == 0 ? "Exam day"
+                : (examCache > 0 ? "Exam in " + examCache + (examCache == 1 ? " day" : " days") : null);
+        Notification.Builder nb = new Notification.Builder(this, CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                .setContentTitle(title)
+                .setContentText(exam == null ? line : line + "  \u00B7  " + exam)
+                .setStyle(new Notification.BigTextStyle().bigText(exam == null ? line : line + "\n" + exam))
+                .setContentIntent(openPi)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true);
+        if (goal > 0) nb.setProgress(goal, Math.min(today, goal), false);
+        if (live) {
+            long el = accumulatedMs + (now - baseElapsed);
+            if (mode == Prefs.MODE_STOPWATCH) {
+                nb.setShowWhen(true).setUsesChronometer(true).setWhen(System.currentTimeMillis() - el);
+            } else {
+                long rem = Math.max(0L, totalMs - el);
+                nb.setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
+                        .setWhen(System.currentTimeMillis() + rem);
+            }
+        } else {
+            nb.setShowWhen(false);
+        }
+        if (mode == Prefs.MODE_POMODORO && phase != PHASE_WORK) {
+            nb.addAction(new Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_media_next), "Skip break",
+                    actionPi(3, ACTION_SKIP)).build());
+        }
+        if (!clock) {
+            nb.addAction(new Notification.Action.Builder(
+                    Icon.createWithResource(this, timerRunning ? android.R.drawable.ic_media_pause
+                            : android.R.drawable.ic_media_play),
+                    timerRunning ? "Pause" : "Resume", actionPi(2, ACTION_TOGGLE)).build());
+        }
+        nb.addAction(new Notification.Action.Builder(
+                Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                "Stop", actionPi(1, ACTION_STOP)).build());
+        return nb.build();
+    }
+
+    /** Re-posts the notification when something it shows has changed. */
+    private void refreshNotification() {
+        long now = SystemClock.elapsedRealtime();
+        if (notifCheckAt == 0L || now - notifCheckAt >= 20000L) {
+            notifCheckAt = now;
+            todayBase = Stats.secs(Stats.load(prefs), Stats.cal(0));
+            examCache = Stats.examDays(prefs);
+        }
+        int today = todayBase + (int) (statAcc / 1000L);
+        String sig = mode + "|" + phase + "|" + round + "|" + timerRunning + "|" + alarming + "|"
+                + (today / 60) + "|" + Prefs.getInt(prefs, Prefs.GOAL_MIN) + "|" + examCache;
+        if (sig.equals(notifSig)) return;
+        notifSig = sig;
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        nm.notify(NOTIF_ID, buildNotification());
+    }
+
     private void startAsForeground() {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Watchu floating timer",
                 NotificationManager.IMPORTANCE_LOW));
-
-        Intent open = new Intent(this, MainActivity.class);
-        PendingIntent openPi = PendingIntent.getActivity(this, 0, open,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Intent stop = new Intent(this, FloatingService.class);
-        stop.setAction(ACTION_STOP);
-        PendingIntent stopPi = PendingIntent.getService(this, 1, stop,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification.Action stopAction = new Notification.Action.Builder(
-                Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                "Stop", stopPi).build();
-
-        Notification n = new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-                .setContentTitle("Watchu is running")
-                .setContentText("Tap to open settings")
-                .setContentIntent(openPi)
-                .addAction(stopAction)
-                .setOngoing(true)
-                .build();
-
+        Notification n = buildNotification();
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else {
@@ -2077,6 +2164,7 @@ public class MainActivity extends Activity {
             return;
         }
         refreshPreview();
+        publishShortcuts();
         if (tab == 2) fillStats();
         handler.removeCallbacks(poll);
         handler.post(poll);
@@ -2951,6 +3039,46 @@ public class MainActivity extends Activity {
         final int green = 0xFF6FD3A0;
         final int red = 0xFFE5707E;
 
+        // exam countdown
+        int examKey = p.getInt(Prefs.EXAM_DATE, 0);
+        int examLeft = Stats.examDays(p);
+        if (examKey != 0 && examLeft < 0) {
+            p.edit().remove(Prefs.EXAM_DATE).apply();
+            examKey = 0;
+        }
+        LinearLayout cx = card();
+        cx.setPadding(dp(16), dp(14), dp(16), dp(14));
+        if (examKey != 0) {
+            cx.addView(ui.medium("Exam", 14, ui.variant), lp(MATCH, WRAP, 0, 0, 0, 2));
+            cx.addView(ui.medium(examLeft == 0 ? "Exam day" : examLeft + (examLeft == 1 ? " day left" : " days left"),
+                    28, examLeft <= 7 ? 0xFFD8A67C : ui.onSurface));
+            cx.addView(ui.text(new SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+                    .format(Stats.fromKey(examKey).getTime()), 13, ui.variant), lp(MATCH, WRAP, 0, 2, 0, 8));
+            LinearLayout er = ui.horizontal();
+            TextView change = ui.chip("Change date", false, true);
+            change.setOnClickListener(v -> pickExamDate());
+            TextView remove = ui.chip("Remove", false, true);
+            remove.setOnClickListener(v -> {
+                p.edit().remove(Prefs.EXAM_DATE).apply();
+                fillStats();
+            });
+            er.addView(change, lp(WRAP, WRAP, 0, 0, 8, 0));
+            er.addView(remove);
+            cx.addView(er);
+        } else {
+            LinearLayout er = ui.horizontal();
+            er.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout tx = ui.vertical();
+            tx.addView(ui.medium("Exam countdown", 16, ui.onSurface));
+            tx.addView(ui.text("Count the days to your exam", 13, ui.variant));
+            er.addView(tx, new LinearLayout.LayoutParams(0, WRAP, 1f));
+            TextView setDate = ui.chip("Set date", true, true);
+            setDate.setOnClickListener(v -> pickExamDate());
+            er.addView(setDate);
+            cx.addView(er);
+        }
+        statsBox.addView(cx, lp(MATCH, WRAP, 0, 0, 0, 12));
+
         // today and goal
         LinearLayout c1 = card();
         c1.setPadding(dp(16), dp(12), dp(16), dp(14));
@@ -3085,28 +3213,65 @@ public class MainActivity extends Activity {
         statsBox.addView(share, lp(MATCH, WRAP, 0, 0, 0, 8));
     }
 
+    private void pickExamDate() {
+        java.util.Calendar c = Stats.cal(30);
+        int ek = p.getInt(Prefs.EXAM_DATE, 0);
+        if (ek != 0) c = Stats.fromKey(ek);
+        int theme = ui.dark ? android.R.style.Theme_DeviceDefault_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert;
+        android.app.DatePickerDialog dp = new android.app.DatePickerDialog(this, theme,
+                (view, y, m, d) -> {
+                    p.edit().putInt(Prefs.EXAM_DATE, y * 10000 + (m + 1) * 100 + d).apply();
+                    fillStats();
+                }, c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH),
+                c.get(java.util.Calendar.DAY_OF_MONTH));
+        dp.getDatePicker().setMinDate(System.currentTimeMillis() - 1000L);
+        dp.show();
+    }
+
     private void pickGoal(final int currentMin) {
-        final int[] mins = {30, 60, 90, 120, 180, 240, 300, 360};
+        final int[] mins = {30, 60, 90, 120, 180, 240, 300, 360, 480, 600};
         String[] labels = new String[mins.length + 1];
         for (int i = 0; i < mins.length; i++) labels[i] = Stats.dur(mins[i] * 60);
-        labels[mins.length] = "Custom (minutes)";
+        labels[mins.length] = "Custom (hours and minutes)";
         dialog().setTitle("Daily goal").setItems(labels, (d, which) -> {
             if (which < mins.length) {
                 confirmGoal(currentMin, mins[which]);
             } else {
-                final android.widget.EditText et = new android.widget.EditText(this);
-                et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-                et.setHint("10 to 720");
-                dialog().setTitle("Goal in minutes (10 to 720)").setView(et)
+                LinearLayout box = ui.horizontal();
+                box.setGravity(Gravity.CENTER_VERTICAL);
+                box.setPadding(dp(22), dp(8), dp(22), 0);
+                final android.widget.EditText hh = new android.widget.EditText(this);
+                hh.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                hh.setHint("0");
+                hh.setText(String.valueOf(currentMin / 60));
+                hh.setGravity(Gravity.CENTER);
+                final android.widget.EditText mm = new android.widget.EditText(this);
+                mm.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                mm.setHint("0");
+                mm.setText(String.valueOf(currentMin % 60));
+                mm.setGravity(Gravity.CENTER);
+                TextView hl = ui.text("hours", 15, ui.variant);
+                TextView ml = ui.text("minutes", 15, ui.variant);
+                box.addView(hh, new LinearLayout.LayoutParams(dp(64), WRAP));
+                box.addView(hl, lp(WRAP, WRAP, 8, 0, 16, 0));
+                box.addView(mm, new LinearLayout.LayoutParams(dp(64), WRAP));
+                box.addView(ml, lp(WRAP, WRAP, 8, 0, 0, 0));
+                dialog().setTitle("Daily goal (10 minutes to 24 hours)").setView(box)
                         .setPositiveButton("OK", (d2, w2) -> {
-                            int v;
+                            int h = 0;
+                            int m = 0;
                             try {
-                                v = Integer.parseInt(et.getText().toString().trim());
+                                String hs = hh.getText().toString().trim();
+                                String ms = mm.getText().toString().trim();
+                                if (hs.length() > 0) h = Integer.parseInt(hs);
+                                if (ms.length() > 0) m = Integer.parseInt(ms);
                             } catch (NumberFormatException e) {
                                 return;
                             }
+                            int v = h * 60 + m;
                             if (v < 10) v = 10;
-                            if (v > 720) v = 720;
+                            if (v > 1440) v = 1440;
                             confirmGoal(currentMin, v);
                         }).setNegativeButton("Cancel", null).show();
             }
@@ -3248,6 +3413,34 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** The menu you get by pressing and holding the app icon. */
+    private void publishShortcuts() {
+        try {
+            android.content.pm.ShortcutManager sm = getSystemService(android.content.pm.ShortcutManager.class);
+            if (sm == null) return;
+            List<Presets.Preset> list = QuickStartActivity.visiblePresets(p);
+            java.util.ArrayList<android.content.pm.ShortcutInfo> out =
+                    new java.util.ArrayList<android.content.pm.ShortcutInfo>();
+            android.graphics.drawable.Icon icon = android.graphics.drawable.Icon.createWithResource(this, R.mipmap.ic_launcher);
+            for (int i = 0; i < Math.min(2, list.size()); i++) {
+                out.add(shortcut("p" + i, list.get(i).name, "Start " + list.get(i).name, "p" + i, icon));
+            }
+            out.add(shortcut("stopwatch", "Stopwatch", "Start stopwatch", "stopwatch", icon));
+            out.add(shortcut("desk", "Desk mode", "Open desk mode", "desk", icon));
+            sm.setDynamicShortcuts(out);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private android.content.pm.ShortcutInfo shortcut(String id, String shortLabel, String longLabel, String which,
+                                                     android.graphics.drawable.Icon icon) {
+        Intent in = new Intent(this, QuickStartActivity.class);
+        in.setAction(Intent.ACTION_VIEW);
+        in.putExtra(QuickStartActivity.EXTRA, which);
+        return new android.content.pm.ShortcutInfo.Builder(this, id)
+                .setShortLabel(shortLabel).setLongLabel(longLabel).setIcon(icon).setIntent(in).build();
+    }
+
     private void openDesk() {
         if (!Settings.canDrawOverlays(this)) {
             Toast.makeText(this, "Turn on \"Display over other apps\" for Watchu, then come back.",
@@ -3355,6 +3548,8 @@ final class Prefs {
     static final String DESK_NOTICE = "desk_notice";
     /** Stats: daily goal in minutes, stars earned, days in the current 10-day run, last day counted. */
     static final String GOAL_MIN = "goal_min";
+    /** Exam date as yyyymmdd, 0 when none. */
+    static final String EXAM_DATE = "exam_date";
     static final String STARS = "stars";
     static final String STAR_RUN = "star_run";
     static final String LAST_EVAL = "last_eval";
@@ -3631,7 +3826,7 @@ public class SettingsActivity extends Activity {
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     static final String FEEDBACK_URL = "https://t.me/watchuhq";
-    static final String UPDATE_URL = "https://github.com/Fury5645/floaty/releases";
+    static final String UPDATE_URL = "https://github.com/Fury5645/floaty/releases/latest/download/Watchu.apk";
 
     private SharedPreferences p;
     private Ui ui;
@@ -3725,7 +3920,7 @@ public class SettingsActivity extends Activity {
         c.addView(linkRow(R.drawable.ic_help, "Quick guide", "Replay the step-by-step tutorial",
                 v -> startActivity(new Intent(this, GuideActivity.class))));
         c.addView(linkRow(R.drawable.ic_download, "Check for updates",
-                "Opens the download page in your browser. You have version " + versionText() + ".",
+                "Downloads the newest version. Install it over this one. You have version " + versionText() + ".",
                 v -> openLink(UPDATE_URL)));
         c.addView(linkRow(R.drawable.ic_mail, "Send feedback",
                 "Opens Telegram (WATCHU HQ). Nothing is sent automatically.",
@@ -5202,6 +5397,17 @@ final class Stats {
                 .putInt(Prefs.LAST_EVAL, key(cal(-1))).apply();
     }
 
+    /** Days until the exam: 0 on exam day, -1 when no date is set or it has passed. */
+    static int examDays(SharedPreferences p) {
+        int ek = p.getInt(Prefs.EXAM_DATE, 0);
+        if (ek == 0) return -1;
+        Calendar a = Calendar.getInstance();
+        a.set(Calendar.HOUR_OF_DAY, 12);
+        Calendar b = fromKey(ek);
+        long days = Math.round((b.getTimeInMillis() - a.getTimeInMillis()) / 86400000.0);
+        return days < 0 ? -1 : (int) days;
+    }
+
     static String dur(int sec) {
         int m = Math.round(sec / 60f);
         int h = m / 60;
@@ -5209,6 +5415,78 @@ final class Stats {
         if (h == 0) return r + " m";
         if (r == 0) return h + " h";
         return h + " h " + r + " m";
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/QuickStartActivity.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.provider.Settings;
+import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Invisible activity behind the app-icon shortcuts: applies a choice and starts the bubble. */
+public class QuickStartActivity extends Activity {
+    static final String EXTRA = "which";
+
+    static List<Presets.Preset> visiblePresets(SharedPreferences p) {
+        List<Presets.Preset> out = new ArrayList<Presets.Preset>();
+        List<String> hidden = Presets.hidden(p);
+        for (Presets.Preset x : Presets.builtIns()) {
+            if (!hidden.contains(x.name)) out.add(x);
+        }
+        out.addAll(Presets.saved(p));
+        return out;
+    }
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        SharedPreferences p = Prefs.get(this);
+        String which = getIntent().getStringExtra(EXTRA);
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Allow \"Display over other apps\" for Watchu first.", Toast.LENGTH_LONG).show();
+            startActivity(new Intent(this, MainActivity.class));
+            finish();
+            return;
+        }
+        if ("desk".equals(which)) {
+            startActivity(new Intent(this, DeskActivity.class));
+            finish();
+            return;
+        }
+        boolean go = false;
+        if ("stopwatch".equals(which)) {
+            p.edit().putInt(Prefs.MODE, Prefs.MODE_STOPWATCH).apply();
+            go = true;
+        } else if (which != null && which.startsWith("p")) {
+            try {
+                int i = Integer.parseInt(which.substring(1));
+                List<Presets.Preset> list = visiblePresets(p);
+                if (i >= 0 && i < list.size()) {
+                    Presets.apply(p, list.get(i));
+                    go = true;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        if (go) {
+            Intent s = new Intent(this, FloatingService.class);
+            s.setAction(FloatingService.ACTION_QUICK);
+            if (FloatingService.active) {
+                startService(s);
+            } else {
+                startForegroundService(s);
+            }
+        }
+        finish();
     }
 }
 FLOATY_EOF
