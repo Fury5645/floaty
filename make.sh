@@ -312,7 +312,6 @@ class BubbleView extends View {
         }
     }
 
-    @Override
     private void drawAll(Canvas c) {
         float w = getWidth();
         float h = getHeight();
