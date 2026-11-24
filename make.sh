@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.11'
+        versionName '1.12'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -67,6 +67,9 @@ cat > 'app/src/main/AndroidManifest.xml' <<'FLOATY_EOF'
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
         </activity>
 
         <activity
@@ -87,6 +90,29 @@ cat > 'app/src/main/AndroidManifest.xml' <<'FLOATY_EOF'
         <activity
             android:name=".GuideActivity"
             android:exported="false" />
+
+        <receiver
+            android:name=".WatchuWidget"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <service
+            android:name=".QuickTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".FloatingService"
@@ -1028,6 +1054,7 @@ public class FloatingService extends Service {
     public void onDestroy() {
         handler.removeCallbacks(tick);
         flushStats();
+        WatchuWidget.refresh(this);
         handler.removeCallbacks(longPress);
         handler.removeCallbacks(fadeRun);
         handler.removeCallbacks(stopSoundRunnable);
@@ -1849,11 +1876,11 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** Seven-step quick guide shown on first launch and from Settings. */
+/** Five-step quick guide shown on first launch and from Settings. */
 public class GuideActivity extends Activity {
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
-    private static final int STEPS = 7;
+    private static final int STEPS = 5;
 
     private SharedPreferences p;
     private Ui ui;
@@ -1943,39 +1970,30 @@ public class GuideActivity extends Activity {
             row.addView(sw);
             art.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
         } else if (step == 1) {
-            title.setText("Pick a mode");
-            body.setText("Use the tabs at the top of the Timer screen. Choose what you need and the "
-                    + "settings below change to match.");
-            addGesture("Timer", "counts down");
-            addGesture("Stopwatch", "counts up");
-            addGesture("Pomodoro", "focus, then break");
-            addGesture("Clock", "shows the time");
-        } else if (step == 2) {
-            title.setText("Set your time");
-            body.setText("Tap a number and type your own value. Or tap a preset to load it in one tap.");
+            title.setText("Choose your time");
+            body.setText("Pick Timer, Stopwatch, Pomodoro or Clock at the top. Then tap a number to type your "
+                    + "own time, or tap a preset.");
+            addGesture("Tap a mode", "Timer, Stopwatch, Pomodoro, Clock");
             addGesture("Tap a number", "type your own");
-            addGesture("Tap a preset", "load it");
-            addGesture("+ Save", "keep your own preset");
-        } else if (step == 3) {
-            title.setText("Start the bubble");
-            body.setText("Tap Start floating timer. The bubble stays on top while you use other apps. "
-                    + "The two small icons beside Start turn sound and vibration on or off.");
+            addGesture("Tap a preset", "load it in one tap");
+        } else if (step == 2) {
+            title.setText("Start");
+            body.setText("Tap Start floating timer. The bubble stays on top while you use other apps.");
             BubbleView bv = new BubbleView(this);
             bv.applyPrefs(p);
             bv.setState("25:00", "FOCUS 1/4", 0.65f, 0, false);
             art.addView(bv, new LinearLayout.LayoutParams(WRAP, WRAP));
-        } else if (step == 4) {
-            title.setText("Control the bubble");
-            body.setText("Everything works right on the bubble. In Pomodoro, tap it while it says "
-                    + "\"Skip break?\" to jump back to focus.");
+        } else if (step == 3) {
+            title.setText("Use the bubble");
+            body.setText("Everything works right on the bubble.");
             addGesture("Tap", "pause or resume");
-            addGesture("Hold", "reset");
+            addGesture("Hold", "restart");
             addGesture("Drag", "move it anywhere");
             addGesture("Drop on \u2715", "close it");
-        } else if (step == 5) {
+        } else {
             title.setText("Make it yours");
-            body.setText("Open the Style tab. Choose Digital or Analog, then pick colours, shape and size. "
-                    + "You see the result live.");
+            body.setText("Open the Style tab for colours, shape and size. The Stats tab shows your goal, streak "
+                    + "and stars. More tips are in Settings.");
             LinearLayout dotsRow = ui.horizontal();
             int[][] cols = {{0xFF14161C, 0xFF14161C, 0xFF7C9CFF}, {0xFFFF7A59, 0xFFB5179E, 0xFFFFE066},
                     {0xFF0F9B8E, 0xFF5B2A86, 0xFFB6F7E4}, {0xFF0C2233, 0xFF0E5A7E, 0xFF4DD0E1}};
@@ -1990,14 +2008,6 @@ public class GuideActivity extends Activity {
                 dotsRow.addView(v, ui.lp(ui.dp(44), ui.dp(44), 6, 0, 6, 0));
             }
             art.addView(dotsRow, new LinearLayout.LayoutParams(WRAP, WRAP));
-        } else {
-            title.setText("Goals and Desk mode");
-            body.setText("Stats shows today against your daily goal, your streak and stars. "
-                    + "Desk mode turns your screen into a big desk clock. Plug in a charger for long use. "
-                    + "Watchu is free for life.");
-            addGesture("Stats tab", "goal, streak, stars");
-            addGesture("1 star", "every 10 days on goal");
-            addGesture("Desk mode", "big clock, screen stays on");
         }
         dots.removeAllViews();
         for (int i = 0; i < STEPS; i++) {
@@ -2151,8 +2161,11 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
         if (Prefs.getInt(p, Prefs.GUIDE_SEEN) == 0) {
-            p.edit().putInt(Prefs.GUIDE_SEEN, 1).apply();
+            // brand new install: the guide covers everything, so there is nothing "new" to show yet
+            p.edit().putInt(Prefs.GUIDE_SEEN, 1).putInt(Prefs.WHATS_SEEN, WhatsNew.VERSION).apply();
             startActivity(new Intent(this, GuideActivity.class));
+        } else {
+            WhatsNew.showIfNew(this, p, ui.dark);
         }
     }
 
@@ -2165,6 +2178,7 @@ public class MainActivity extends Activity {
         }
         refreshPreview();
         publishShortcuts();
+        WatchuWidget.refresh(this);
         if (tab == 2) fillStats();
         handler.removeCallbacks(poll);
         handler.post(poll);
@@ -3050,8 +3064,13 @@ public class MainActivity extends Activity {
         cx.setPadding(dp(16), dp(14), dp(16), dp(14));
         if (examKey != 0) {
             cx.addView(ui.medium("Exam", 14, ui.variant), lp(MATCH, WRAP, 0, 0, 0, 2));
+            int weekAvg = thisWeek / 7;
+            int examCol = Charts.status(weekAvg, goal);
+            int avgPct = goal > 0 ? Math.round(weekAvg * 100f / goal) : 0;
             cx.addView(ui.medium(examLeft == 0 ? "Exam day" : examLeft + (examLeft == 1 ? " day left" : " days left"),
-                    28, examLeft <= 7 ? 0xFFD8A67C : ui.onSurface));
+                    28, examCol));
+            cx.addView(ui.text("Last 7 days: " + avgPct + "% of your daily goal", 13, examCol),
+                    lp(MATCH, WRAP, 0, 2, 0, 0));
             cx.addView(ui.text(new SimpleDateFormat("d MMM yyyy", Locale.getDefault())
                     .format(Stats.fromKey(examKey).getTime()), 13, ui.variant), lp(MATCH, WRAP, 0, 2, 0, 8));
             LinearLayout er = ui.horizontal();
@@ -3094,7 +3113,7 @@ public class MainActivity extends Activity {
         ring.big = Stats.dur(today);
         ring.small = "of " + Stats.dur(goal);
         ring.trackColor = ui.line;
-        ring.arcColor = today >= goal ? green : ui.primary;
+        ring.arcColor = Charts.status(today, goal);
         ring.textColor = ui.onSurface;
         ring.subColor = ui.variant;
         c1.addView(ring, lp(dp(170), dp(170), 0, 0, 0, 6));
@@ -3123,29 +3142,36 @@ public class MainActivity extends Activity {
         c2.addView(two);
         statsBox.addView(c2, lp(MATCH, WRAP, 0, 0, 0, 12));
 
-        // 30-day graph
+        // last 14 days, stock style
+        final int wkPct = Stats.weekPct(thisWeek, lastWeek);
+        final int wkCol = Charts.trend(wkPct);
         LinearLayout c3 = card();
         c3.setPadding(dp(16), dp(12), dp(16), dp(12));
-        c3.addView(ui.medium("Last 30 days", 14, ui.variant), lp(MATCH, WRAP, 0, 0, 0, 8));
-        BarsView bars = new BarsView(this);
-        bars.goalSec = goal;
-        for (int i = 0; i < 30; i++) bars.secs[i] = Stats.secs(m, Stats.cal(i - 29));
-        bars.metColor = green;
-        bars.missColor = red;
-        bars.todayColor = ui.primary;
-        bars.lineColor = ui.variant;
-        bars.textColor = ui.variant;
-        c3.addView(bars, lp(MATCH, dp(130), 0, 0, 0, 6));
-        c3.addView(ui.text("Green: goal met. Red: missed. Blue: today. Dotted line: your goal.", 12, ui.variant));
+        LinearLayout h3 = ui.horizontal();
+        h3.setGravity(Gravity.CENTER_VERTICAL);
+        h3.addView(ui.medium("Last 14 days", 14, ui.variant), new LinearLayout.LayoutParams(0, WRAP, 1f));
+        h3.addView(ui.medium(Stats.trendWord(wkPct), 13, wkCol));
+        c3.addView(h3, lp(MATCH, WRAP, 0, 0, 0, 8));
+        StockView sv = new StockView(this);
+        sv.goalSec = goal;
+        sv.secs = Stats.lastDays(m, 14);
+        sv.lineColor = wkCol;
+        sv.surface = ui.container;
+        sv.textColor = ui.variant;
+        sv.tagBg = ui.high;
+        sv.tagText = ui.onSurface;
+        c3.addView(sv, lp(MATCH, dp(190), 0, 0, 0, 6));
+        c3.addView(ui.text("Green: goal met. Amber: half or more. Red: under half. Dashed line: your goal.", 12,
+                ui.variant));
         statsBox.addView(c3, lp(MATCH, WRAP, 0, 0, 0, 12));
 
         // this week vs last week
         LinearLayout c4 = card();
         c4.setPadding(dp(16), dp(12), dp(16), dp(12));
         c4.addView(ui.medium("This week vs last week", 14, ui.variant), lp(MATCH, WRAP, 0, 0, 0, 6));
-        boolean up = thisWeek >= lastWeek;
-        TextView wk = ui.medium((up ? "\u25B2 " : "\u25BC ") + Stats.dur(Math.abs(thisWeek - lastWeek))
-                + (up ? " more" : " less"), 20, up ? green : red);
+        String wkText = wkPct == Stats.NO_PCT ? "New"
+                : (wkPct > 0 ? "\u25B2 " : wkPct < 0 ? "\u25BC " : "") + Stats.pctText(wkPct);
+        TextView wk = ui.medium(wkText, 22, wkCol);
         c4.addView(wk);
         c4.addView(ui.text("This week " + Stats.dur(thisWeek) + "  \u00B7  Last week " + Stats.dur(lastWeek),
                 13, ui.variant), lp(MATCH, WRAP, 0, 2, 0, 0));
@@ -3299,7 +3325,7 @@ public class MainActivity extends Activity {
         try {
             if (android.os.Build.VERSION.SDK_INT >= 29) {
                 android.graphics.Bitmap bmp = ReportCard.render(goal, today, streak, stars, run, thisWeek,
-                        lastWeek, last14);
+                        lastWeek, last14, Stats.examDays(p));
                 android.content.ContentValues cv = new android.content.ContentValues();
                 cv.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,
                         "watchu-report-" + System.currentTimeMillis() + ".png");
@@ -3578,6 +3604,7 @@ final class Prefs {
     static final String SKIPPROMPT = "skip_prompt";
     static final String CYCLES = "cycle_counter";
     static final String GUIDE_SEEN = "guide_seen";
+    static final String WHATS_SEEN = "whats_seen";
     static final String TIMER_SECS = "timer_secs";
     static final String SCREEN_PAUSE = "screen_pause";
     static final String MOTION_PAUSE = "motion_pause";
@@ -3805,10 +3832,15 @@ cat > 'app/src/main/java/com/floaty/timer/SettingsActivity.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.StatusBarManager;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
+import android.graphics.drawable.Icon;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -3919,6 +3951,13 @@ public class SettingsActivity extends Activity {
         c = card(box);
         c.addView(linkRow(R.drawable.ic_help, "Quick guide", "Replay the step-by-step tutorial",
                 v -> startActivity(new Intent(this, GuideActivity.class))));
+        c.addView(linkRow(R.drawable.ic_help, "More tips", "Handy things the tutorial skips",
+                v -> WhatsNew.showTips(this, ui.dark)));
+        c.addView(linkRow(R.drawable.ic_plus, "Add to quick settings",
+                "Start and pause from the panel you pull down. Tap to add the Watchu tile.",
+                v -> addTile()));
+        c.addView(linkRow(R.drawable.ic_check, "What's new", "See what changed in this version",
+                v -> WhatsNew.showNews(this, ui.dark)));
         c.addView(linkRow(R.drawable.ic_download, "Check for updates",
                 "Downloads the newest version. Install it over this one. You have version " + versionText() + ".",
                 v -> openLink(UPDATE_URL)));
@@ -3947,6 +3986,35 @@ public class SettingsActivity extends Activity {
         box.addView(ui.text("Free for life. No ads. No premium.", 14, ui.variant), ui.lp(MATCH, WRAP, 0, 2, 0, 0));
 
         setContentView(frame);
+    }
+
+    /** Asks Android to add the Quick Settings tile (Android 13 and newer), otherwise shows how to do it by hand. */
+    private void addTile() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            try {
+                StatusBarManager sbm = getSystemService(StatusBarManager.class);
+                sbm.requestAddTileService(new ComponentName(this, QuickTileService.class),
+                        getString(R.string.app_name),
+                        Icon.createWithResource(this, R.drawable.ic_tile),
+                        getMainExecutor(),
+                        result -> {
+                            if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED
+                                    || result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED) {
+                                Toast.makeText(this, "Watchu tile is in Quick Settings", Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        new AlertDialog.Builder(this, ui.dark
+                ? android.R.style.Theme_DeviceDefault_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+                .setTitle("Add the Watchu tile")
+                .setMessage("Swipe down twice from the top of the screen to open Quick Settings. "
+                        + "Tap the pencil (edit) icon, find Watchu and drag it into your tiles.\n\n"
+                        + "Tap the tile to start your first preset. Tap again to pause. Hold it to open the app.")
+                .setPositiveButton("Got it", null).show();
     }
 
     private String versionText() {
@@ -4713,6 +4781,7 @@ cat > 'app/src/main/res/values/strings.xml' <<'FLOATY_EOF'
 <resources>
     <string name="app_name">Watchu</string>
     <color name="ic_bg">#A9C7FF</color>
+    <string name="widget_desc">Progress today, weekly change, exam countdown and quick-start buttons</string>
 </resources>
 FLOATY_EOF
 mkdir -p 'app/src/main/res/drawable'
@@ -5036,171 +5105,194 @@ cat > 'app/src/main/res/drawable/ic_desk.xml' <<'FLOATY_EOF'
 </vector>
 FLOATY_EOF
 mkdir -p 'app/src/main/java/com/floaty/timer'
-cat > 'app/src/main/java/com/floaty/timer/BarsView.java' <<'FLOATY_EOF'
-package com.floaty.timer;
-
-import android.content.Context;
-import android.graphics.Canvas;
-import android.graphics.DashPathEffect;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.RectF;
-import android.view.View;
-
-/** Daily bars for the last 30 days with a dotted goal line. */
-final class BarsView extends View {
-    int[] secs = new int[30];
-    int goalSec = 3600;
-    int metColor = 0xFF6FD3A0;
-    int missColor = 0xFFE5707E;
-    int todayColor = 0xFFA9C5FF;
-    int lineColor = 0xFF8C93A3;
-    int textColor = 0xFF8C93A3;
-    private final Paint pt = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF rf = new RectF();
-    private final Path path = new Path();
-
-    BarsView(Context c) {
-        super(c);
-    }
-
-    @Override
-    protected void onDraw(Canvas c) {
-        float d = getResources().getDisplayMetrics().density;
-        float w = getWidth();
-        float h = getHeight();
-        float top = 6f * d;
-        float bottom = h - 18f * d;
-        int n = secs.length;
-        int max = Math.max(goalSec, 1);
-        for (int s : secs) if (s > max) max = s;
-        float scale = (bottom - top) / (max * 1.1f);
-        float slot = w / n;
-        float bw = slot * 0.62f;
-        pt.setStyle(Paint.Style.FILL);
-        for (int i = 0; i < n; i++) {
-            int s = secs[i];
-            boolean today = i == n - 1;
-            pt.setColor(today ? todayColor : (s >= goalSec ? metColor : missColor));
-            float bh = Math.max(s * scale, s > 0 ? 2f * d : 0f);
-            if (!today && s == 0) bh = 3f * d;
-            float x = i * slot + (slot - bw) / 2f;
-            rf.set(x, bottom - bh, x + bw, bottom);
-            c.drawRoundRect(rf, bw / 3f, bw / 3f, pt);
-        }
-        float gy = bottom - goalSec * scale;
-        pt.setStyle(Paint.Style.STROKE);
-        pt.setStrokeWidth(1.5f * d);
-        pt.setColor(lineColor);
-        pt.setPathEffect(new DashPathEffect(new float[]{4f * d, 4f * d}, 0f));
-        path.rewind();
-        path.moveTo(0f, gy);
-        path.lineTo(w, gy);
-        c.drawPath(path, pt);
-        pt.setPathEffect(null);
-        pt.setStyle(Paint.Style.FILL);
-        pt.setColor(textColor);
-        pt.setTextSize(11f * d);
-        pt.setTextAlign(Paint.Align.LEFT);
-        c.drawText("30 days ago", 0f, h - 3f * d, pt);
-        pt.setTextAlign(Paint.Align.RIGHT);
-        c.drawText("Today", w, h - 3f * d, pt);
-    }
-}
-FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/ReportCard.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+
 /** Draws the shareable report card picture. */
 final class ReportCard {
+    private static final int BG = 0xFF101319;
+    private static final int SURFACE = 0xFF171C25;
+    private static final int PANEL = 0xFF1D2330;
+    private static final int TEXT = 0xFFE6E9F0;
+    private static final int MUTED = 0xFF8C93A3;
+    private static final int PILL = 0xFF2A3140;
+
     private ReportCard() {
     }
 
+    private static Typeface reg() {
+        return Typeface.create("sans-serif", Typeface.NORMAL);
+    }
+
+    private static Typeface med() {
+        return Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    }
+
+    private static void text(Canvas c, Paint p, String s, float x, float y, float size, int color, boolean bold,
+                             Paint.Align align) {
+        p.setStyle(Paint.Style.FILL);
+        p.setShader(null);
+        p.setTypeface(bold ? med() : reg());
+        p.setTextSize(size);
+        p.setColor(color);
+        p.setTextAlign(align);
+        c.drawText(s, x, y, p);
+    }
+
+    private static void roundRect(Canvas c, Paint p, float l, float t, float r, float b, float rad, int color) {
+        p.setStyle(Paint.Style.FILL);
+        p.setShader(null);
+        p.setColor(color);
+        c.drawRoundRect(new RectF(l, t, r, b), rad, rad, p);
+    }
+
+    /** examDays: days until the exam, 0 on exam day, -1 when there is no date. */
     static Bitmap render(int goalSec, int todaySec, int streak, int stars, int run, int thisWeek,
-                         int lastWeek, int[] last14) {
+                         int lastWeek, int[] last14, int examDays) {
         int W = 1080;
         int H = 1350;
         Bitmap bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        c.drawColor(0xFF101319);
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(0xFF171C25);
-        c.drawRoundRect(new RectF(40, 40, W - 40, H - 40), 48, 48, p);
+        c.drawColor(BG);
+        roundRect(c, p, 40, 40, W - 40, H - 40, 48, SURFACE);
 
-        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        p.setColor(0xFFE6E9F0);
-        p.setTextSize(64);
-        p.setTextAlign(Paint.Align.LEFT);
-        c.drawText("Watchu", 100, 150, p);
-        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        p.setColor(0xFF8C93A3);
-        p.setTextSize(36);
-        c.drawText("Report card", 100, 205, p);
+        int pct = Stats.weekPct(thisWeek, lastWeek);
+        int tcol = Charts.trend(pct);
 
-        float cx = W / 2f;
-        float cy = 470;
-        float rr = 190;
-        RectF rf = new RectF(cx - rr, cy - rr, cx + rr, cy + rr);
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeWidth(36);
-        p.setStrokeCap(Paint.Cap.ROUND);
-        p.setColor(0x33FFFFFF);
-        c.drawOval(rf, p);
+        // header
+        text(c, p, "Watchu", 100, 142, 58, TEXT, true, Paint.Align.LEFT);
+        String range;
+        try {
+            SimpleDateFormat f = new SimpleDateFormat("d MMM", Locale.getDefault());
+            range = f.format(Stats.cal(-6).getTime()) + " – " + f.format(Stats.cal(0).getTime());
+        } catch (Exception e) {
+            range = "";
+        }
+        text(c, p, "Report card · " + range, 100, 192, 32, MUTED, false, Paint.Align.LEFT);
+
+        // exam chip, coloured by the 7-day average against the goal
+        if (examDays >= 0) {
+            int ecol = Charts.status(thisWeek / 7, goalSec);
+            String et = examDays == 0 ? "EXAM DAY" : "EXAM IN " + examDays + (examDays == 1 ? " DAY" : " DAYS");
+            p.setTypeface(med());
+            p.setTextSize(28);
+            float tw = p.measureText(et);
+            float cw = tw + 56;
+            roundRect(c, p, 1020 - cw, 70, 1020, 132, 31, Charts.alpha(ecol, 0x33));
+            text(c, p, et, 1020 - cw / 2f, 111, 28, ecol, true, Paint.Align.CENTER);
+        }
+
+        // ring: red below half of the goal, amber from half, green when the goal is met
         float frac = goalSec > 0 ? Math.min(1f, todaySec / (float) goalSec) : 0f;
-        p.setColor(todaySec >= goalSec ? 0xFF6FD3A0 : 0xFFA9C5FF);
-        if (frac > 0.003f) c.drawArc(rf, -90f, 360f * frac, false, p);
-        p.setStyle(Paint.Style.FILL);
-        p.setTextAlign(Paint.Align.CENTER);
-        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        p.setColor(0xFFE6E9F0);
-        p.setTextSize(84);
-        c.drawText(Stats.dur(todaySec), cx, cy + 22, p);
-        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        p.setColor(0xFF8C93A3);
-        p.setTextSize(36);
-        c.drawText("of " + Stats.dur(goalSec) + " today", cx, cy + 80, p);
+        Charts.ring(c, 540, 370, 130, 28, frac, Charts.status(todaySec, goalSec), 0x33FFFFFF);
+        text(c, p, Stats.dur(todaySec), 540, 368, 52, TEXT, true, Paint.Align.CENTER);
+        text(c, p, "of " + Stats.dur(goalSec) + " today", 540, 406, 27, MUTED, false, Paint.Align.CENTER);
 
-        p.setTextAlign(Paint.Align.LEFT);
-        String[] k = {"Streak", "Stars", "This week", "Last week"};
-        String[] v = {streak + (streak == 1 ? " day" : " days"), String.valueOf(stars) + "  (" + run + "/10)",
-                Stats.dur(thisWeek), Stats.dur(lastWeek)};
-        for (int i = 0; i < 4; i++) {
-            float y = 800 + i * 95;
-            p.setColor(0xFF8C93A3);
-            p.setTextSize(40);
-            p.setTextAlign(Paint.Align.LEFT);
-            c.drawText(k[i], 110, y, p);
-            p.setColor(0xFFE6E9F0);
-            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            p.setTextAlign(Paint.Align.RIGHT);
-            c.drawText(v[i], W - 110, y, p);
-            p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        // this week against last week
+        roundRect(c, p, 80, 548, 1000, 763, 36, PANEL);
+        text(c, p, "THIS WEEK vs LAST WEEK", 110, 600, 24, MUTED, true, Paint.Align.LEFT);
+        float bx = 110;
+        if (pct != Stats.NO_PCT && pct != 0) {
+            Path tri = new Path();
+            float ty = 678;
+            if (pct > 0) {
+                tri.moveTo(bx, ty + 26);
+                tri.lineTo(bx + 56, ty + 26);
+                tri.lineTo(bx + 28, ty - 26);
+            } else {
+                tri.moveTo(bx, ty - 26);
+                tri.lineTo(bx + 56, ty - 26);
+                tri.lineTo(bx + 28, ty + 26);
+            }
+            tri.close();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(tcol);
+            c.drawPath(tri, p);
+            bx += 80;
+        }
+        String pt = Stats.pctText(pct);
+        float size = 96;
+        p.setTypeface(med());
+        p.setTextSize(size);
+        float maxW = 480 - (bx - 110);
+        float w = p.measureText(pt);
+        if (w > maxW) size = size * maxW / w;
+        text(c, p, pt, bx, 703, size, tcol, true, Paint.Align.LEFT);
+
+        String[] k = {"This week", "Last week"};
+        String[] v = {Stats.dur(thisWeek), Stats.dur(lastWeek)};
+        float[] ys = {664, 712};
+        for (int i = 0; i < 2; i++) {
+            p.setTypeface(med());
+            p.setTextSize(36);
+            float vw = p.measureText(v[i]);
+            text(c, p, v[i], 970, ys[i], 36, TEXT, true, Paint.Align.RIGHT);
+            text(c, p, k[i], 970 - vw - 18, ys[i], 28, MUTED, false, Paint.Align.RIGHT);
         }
 
-        int max = Math.max(goalSec, 1);
-        for (int s : last14) if (s > max) max = s;
-        float base = H - 130;
-        float bw = (W - 220) / 14f;
-        p.setStyle(Paint.Style.FILL);
-        for (int i = 0; i < 14; i++) {
-            int s = last14[i];
-            float bh = Math.max(8f, s / (float) max * 130f);
-            p.setColor(i == 13 ? 0xFFA9C5FF : (s >= goalSec ? 0xFF6FD3A0 : 0xFFE5707E));
-            float x = 110 + i * bw + bw * 0.15f;
-            c.drawRoundRect(new RectF(x, base - bh, x + bw * 0.7f, base), 8, 8, p);
+        // last 14 days, stock style
+        roundRect(c, p, 80, 783, 1000, 1101, 36, PANEL);
+        text(c, p, "LAST 14 DAYS", 110, 832, 24, MUTED, true, Paint.Align.LEFT);
+        String tw2 = Stats.trendWord(pct);
+        p.setTypeface(med());
+        p.setTextSize(28);
+        float pw = p.measureText(tw2) + 48;
+        roundRect(c, p, 964 - pw, 797, 964, 851, 27, Charts.alpha(tcol, 0x33));
+        text(c, p, tw2, 964 - pw / 2f, 834, 28, tcol, true, Paint.Align.CENTER);
+
+        Charts.Style st = new Charts.Style();
+        st.fs = 26;
+        st.dot = 7;
+        st.line = 6;
+        st.tags = true;
+        st.grid = true;
+        st.lineColor = tcol;
+        st.surface = PANEL;
+        st.textColor = MUTED;
+        st.tagBg = PILL;
+        st.tagText = 0xFFC7CCD8;
+        Charts.stock(c, 80, 871, 920, 230, last14, goalSec, st);
+
+        // legend
+        String[] ln = {"Goal met", "Half or more", "Under half"};
+        int[] lc = {Charts.GREEN, Charts.AMBER, Charts.RED};
+        float lx = 110;
+        for (int i = 0; i < 3; i++) {
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(lc[i]);
+            c.drawCircle(lx + 8, 1140, 8, p);
+            p.setTypeface(reg());
+            p.setTextSize(24);
+            text(c, p, ln[i], lx + 26, 1148, 24, MUTED, false, Paint.Align.LEFT);
+            lx += 26 + p.measureText(ln[i]) + 40;
         }
-        p.setColor(0xFF8C93A3);
-        p.setTextSize(32);
-        p.setTextAlign(Paint.Align.CENTER);
-        c.drawText("Made with Watchu. Free for life.", cx, H - 70, p);
+
+        // streak and stars
+        String s1 = "Streak  " + streak + (streak == 1 ? " day" : " days");
+        String s2 = "Stars  " + stars + "  (" + run + "/10)";
+        p.setTypeface(med());
+        p.setTextSize(28);
+        float w1 = p.measureText(s1) + 56;
+        float w2 = p.measureText(s2) + 56;
+        float gap = 24;
+        float sx = 540 - (w1 + w2 + gap) / 2f;
+        roundRect(c, p, sx, 1172, sx + w1, 1226, 27, PILL);
+        text(c, p, s1, sx + w1 / 2f, 1209, 28, TEXT, true, Paint.Align.CENTER);
+        roundRect(c, p, sx + w1 + gap, 1172, sx + w1 + gap + w2, 1226, 27, PILL);
+        text(c, p, s2, sx + w1 + gap + w2 / 2f, 1209, 28, TEXT, true, Paint.Align.CENTER);
+
+        text(c, p, "Made with Watchu. Free for life.", 540, 1275, 28, MUTED, false, Paint.Align.CENTER);
         return bmp;
     }
 }
@@ -5408,6 +5500,45 @@ final class Stats {
         return days < 0 ? -1 : (int) days;
     }
 
+    /** No comparison possible: last week had nothing. */
+    static final int NO_PCT = Integer.MIN_VALUE;
+
+    /** Change from last week to this week, in whole percent. */
+    static int weekPct(int thisWeek, int lastWeek) {
+        if (lastWeek <= 0) return NO_PCT;
+        return Math.round((thisWeek - lastWeek) * 100f / lastWeek);
+    }
+
+    static String pctText(int pct) {
+        if (pct == NO_PCT) return "New";
+        return (pct > 0 ? "+" : "") + pct + "%";
+    }
+
+    /** Words for the week-on-week change, with an arrow. */
+    static String trendWord(int pct) {
+        if (pct == NO_PCT) return "New";
+        if (pct >= 5) return "\u25B2 Rising";
+        if (pct <= -5) return "\u25BC Falling";
+        return "Steady";
+    }
+
+    /** Seconds for each of the last n days, oldest first, ending today. */
+    static int[] lastDays(Map<Integer, Integer> m, int n) {
+        int[] a = new int[n];
+        for (int i = 0; i < n; i++) a[i] = secs(m, cal(i - (n - 1)));
+        return a;
+    }
+
+    /** Compact duration, like 2h 30m, 42m or 3h. */
+    static String durShort(int sec) {
+        int m = Math.round(sec / 60f);
+        int h = m / 60;
+        int r = m % 60;
+        if (h == 0) return r + "m";
+        if (r == 0) return h + "h";
+        return h + "h " + r + "m";
+    }
+
     static String dur(int sec) {
         int m = Math.round(sec / 60f);
         int h = m / 60;
@@ -5489,6 +5620,783 @@ public class QuickStartActivity extends Activity {
         finish();
     }
 }
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/Charts.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.graphics.Canvas;
+import android.graphics.DashPathEffect;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.Typeface;
+
+/**
+ * Shared drawing and colour rules, so the Stats page, the report card and the widget always match.
+ * Colours: green = goal met, amber = half of the goal or more, red = under half.
+ */
+final class Charts {
+    static final int GREEN = 0xFF6FD3A0;
+    static final int AMBER = 0xFFD8A67C;
+    static final int RED = 0xFFE5707E;
+    static final int BLUE = 0xFFA9C5FF;
+    static final int MUTED = 0xFF8C93A3;
+
+    private Charts() {
+    }
+
+    /** Status colour of an amount against the goal. */
+    static int status(int sec, int goalSec) {
+        if (goalSec <= 0) return BLUE;
+        if (sec >= goalSec) return GREEN;
+        if (sec * 2 >= goalSec) return AMBER;
+        return RED;
+    }
+
+    /** Colour of the week-on-week change: green up 5% or more, red down 5% or more, otherwise blue. */
+    static int trend(int pct) {
+        if (pct == Stats.NO_PCT) return BLUE;
+        if (pct >= 5) return GREEN;
+        if (pct <= -5) return RED;
+        return BLUE;
+    }
+
+    static int alpha(int color, int a) {
+        return (color & 0x00FFFFFF) | (a << 24);
+    }
+
+    /** Settings for {@link #stock}. Sizes are in pixels. */
+    static final class Style {
+        float fs = 12f;
+        float dot = 4f;
+        float line = 3f;
+        boolean tags = false;
+        boolean grid = false;
+        float zoom = 0f;
+        int lineColor = BLUE;
+        int surface = 0xFF171C25;
+        int textColor = MUTED;
+        int tagBg = 0xFF2A3140;
+        int tagText = 0xFFC7CCD8;
+    }
+
+    private static void smooth(Path p, float[] x, float[] y) {
+        int n = x.length;
+        p.moveTo(x[0], y[0]);
+        for (int i = 0; i < n - 1; i++) {
+            float x0 = i > 0 ? x[i - 1] : x[i];
+            float y0 = i > 0 ? y[i - 1] : y[i];
+            float x1 = x[i];
+            float y1 = y[i];
+            float x2 = x[i + 1];
+            float y2 = y[i + 1];
+            float x3 = i + 2 < n ? x[i + 2] : x2;
+            float y3 = i + 2 < n ? y[i + 2] : y2;
+            p.cubicTo(x1 + (x2 - x0) / 6f, y1 + (y2 - y0) / 6f, x2 - (x3 - x1) / 6f, y2 - (y3 - y1) / 6f, x2, y2);
+        }
+    }
+
+    private static void pill(Canvas c, Paint p, float cx, float cy, float w, float h, int bg, String text,
+                             int textColor, float textSize) {
+        p.setStyle(Paint.Style.FILL);
+        p.setShader(null);
+        p.setColor(bg);
+        c.drawRoundRect(new RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f), h / 2f, h / 2f, p);
+        p.setColor(textColor);
+        p.setTextSize(textSize);
+        p.setTextAlign(Paint.Align.CENTER);
+        c.drawText(text, cx, cy + textSize * 0.35f, p);
+    }
+
+    /** A stock-chart style line graph: smooth line, shaded area, dashed goal level, a dot per day. */
+    static void stock(Canvas c, float left, float top, float w, float h, int[] secs, int goalSec, Style s) {
+        int n = secs.length;
+        if (n < 2 || w <= 0f || h <= 0f) return;
+        float padL = s.tags ? s.fs * 1.15f : s.fs * 0.5f;
+        float padR = s.tags ? s.fs * 7.6f : s.fs * 3.4f;
+        float pad = Math.max(s.dot * 2.6f, s.fs * 0.55f);
+        float x0 = left + padL;
+        float gw = w - padL - padR;
+        float yTop = top + pad;
+        float yBase = top + h - pad;
+        if (gw <= 4f || yBase <= yTop + 4f) return;
+
+        float maxV = Math.max(goalSec, 1);
+        float minV = Math.max(goalSec, 1);
+        for (int v : secs) {
+            if (v > maxV) maxV = v;
+            if (v < minV) minV = v;
+        }
+        float hi = maxV * 1.15f;
+        float lo = s.zoom > 0f ? minV * s.zoom : 0f;
+        if (hi <= lo + 1f) hi = lo + 1f;
+        float span = hi - lo;
+
+        float[] xs = new float[n];
+        float[] ys = new float[n];
+        for (int i = 0; i < n; i++) {
+            xs[i] = x0 + i * (gw / (n - 1));
+            ys[i] = yBase - ((secs[i] - lo) / span) * (yBase - yTop);
+        }
+        float gy = yBase - ((goalSec - lo) / span) * (yBase - yTop);
+        float ly = ys[n - 1];
+        float th = s.fs * 1.7f;
+        float gty = gy;
+        float lty = ly;
+        if (s.tags && Math.abs(gty - lty) < th + 2f) {
+            if (gty <= lty) {
+                gty = lty - th - 3f;
+            } else {
+                gty = lty + th + 3f;
+            }
+        }
+
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+
+        // grid and axis labels
+        if (s.grid) {
+            float[] levels = {0.33f, 0.66f, 1f};
+            for (float f : levels) {
+                float gv = maxV * f;
+                float yy = yBase - ((gv - lo) / span) * (yBase - yTop);
+                if (Math.abs(yy - gy) < s.fs * 1.4f) continue;
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(Math.max(1f, s.fs / 12f));
+                p.setColor(0x14FFFFFF);
+                c.drawLine(x0, yy, x0 + gw, yy, p);
+                boolean hide = s.tags && (Math.abs(yy - gty) < th * 0.9f || Math.abs(yy - lty) < th * 0.9f);
+                if (s.tags && !hide) {
+                    p.setStyle(Paint.Style.FILL);
+                    p.setColor(alpha(s.textColor, 0xB0));
+                    p.setTextSize(s.fs);
+                    p.setTextAlign(Paint.Align.LEFT);
+                    c.drawText(Stats.durShort((int) gv), x0 + gw + s.fs * 0.7f, yy + s.fs * 0.35f, p);
+                }
+            }
+        }
+
+        Path line = new Path();
+        smooth(line, xs, ys);
+        Path area = new Path(line);
+        area.lineTo(xs[n - 1], yBase);
+        area.lineTo(xs[0], yBase);
+        area.close();
+        p.setStyle(Paint.Style.FILL);
+        p.setShader(new LinearGradient(0f, yTop, 0f, yBase, alpha(s.lineColor, 0x61), alpha(s.lineColor, 0x00),
+                Shader.TileMode.CLAMP));
+        c.drawPath(area, p);
+        p.setShader(null);
+
+        // goal level
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1f, s.fs / 9f));
+        p.setColor(alpha(MUTED, 0xE6));
+        p.setPathEffect(new DashPathEffect(new float[]{s.fs * 0.6f, s.fs * 0.45f}, 0f));
+        c.drawLine(x0, gy, x0 + gw, gy, p);
+        p.setPathEffect(null);
+
+        // the line
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(s.line);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setColor(s.lineColor);
+        c.drawPath(line, p);
+
+        // dots
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(alpha(status(secs[n - 1], goalSec), 0x38));
+        c.drawCircle(xs[n - 1], ys[n - 1], s.dot * 2.6f, p);
+        for (int i = 0; i < n; i++) {
+            boolean last = i == n - 1;
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(status(secs[i], goalSec));
+            c.drawCircle(xs[i], ys[i], last ? s.dot * 1.5f : s.dot, p);
+            if (last) {
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(s.dot * 0.6f);
+                p.setColor(s.surface);
+                c.drawCircle(xs[i], ys[i], s.dot * 1.5f, p);
+            }
+        }
+
+        // right edge: goal tag and latest-value tag
+        if (s.tags) {
+            float tx = x0 + gw + s.fs * 0.6f;
+            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            String gt = "Goal " + Stats.durShort(goalSec);
+            p.setTextSize(s.fs * 0.9f);
+            float gtw = Math.max(s.fs * 5.2f, p.measureText(gt) + s.fs * 1.2f);
+            pill(c, p, tx + gtw / 2f, gty, gtw, th, s.tagBg, gt, s.tagText, s.fs * 0.9f);
+            String lt = Stats.durShort(secs[n - 1]);
+            p.setTextSize(s.fs * 0.95f);
+            float ltw = Math.max(s.fs * 5.2f, p.measureText(lt) + s.fs * 1.2f);
+            pill(c, p, tx + ltw / 2f, lty, ltw, th, status(secs[n - 1], goalSec), lt, 0xFF101319, s.fs * 0.95f);
+        } else {
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(s.textColor);
+            p.setTextSize(s.fs);
+            p.setTextAlign(Paint.Align.LEFT);
+            c.drawText("goal", x0 + gw + s.dot * 3f + 3f, gy + s.fs * 0.35f, p);
+        }
+    }
+
+    /** A progress ring. */
+    static void ring(Canvas c, float cx, float cy, float r, float stroke, float frac, int color, int track) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(stroke);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        RectF rf = new RectF(cx - r, cy - r, cx + r, cy + r);
+        p.setColor(track);
+        c.drawOval(rf, p);
+        if (frac > 0.003f) {
+            p.setColor(color);
+            c.drawArc(rf, -90f, 360f * Math.min(1f, frac), false, p);
+        }
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/QuickTileService.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.app.PendingIntent;
+import android.content.Intent;
+import android.graphics.drawable.Icon;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.service.quicksettings.Tile;
+import android.service.quicksettings.TileService;
+
+import java.util.List;
+
+/**
+ * Quick Settings tile. Tap starts your first preset, tap while running pauses or resumes,
+ * long-press opens the app.
+ */
+public class QuickTileService extends TileService {
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    @Override
+    public void onStartListening() {
+        super.onStartListening();
+        update();
+    }
+
+    @Override
+    public void onClick() {
+        super.onClick();
+        if (FloatingService.active && !FloatingService.dClock) {
+            Intent t = new Intent(this, FloatingService.class);
+            t.setAction(FloatingService.ACTION_TOGGLE);
+            try {
+                startService(t);
+            } catch (Exception ignored) {
+            }
+            handler.postDelayed(this::update, 400L);
+            return;
+        }
+        Intent i = new Intent(this, QuickStartActivity.class);
+        i.putExtra(QuickStartActivity.EXTRA, "p0");
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                PendingIntent pi = PendingIntent.getActivity(this, 200, i,
+                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                startActivityAndCollapse(pi);
+            } else {
+                startActivityAndCollapse(i);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void update() {
+        Tile t = getQsTile();
+        if (t == null) return;
+        boolean on = FloatingService.active && !FloatingService.dClock;
+        t.setState(on ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
+        t.setLabel(getString(R.string.app_name));
+        t.setIcon(Icon.createWithResource(this, R.drawable.ic_tile));
+        if (Build.VERSION.SDK_INT >= 29) {
+            String sub;
+            if (on) {
+                sub = (FloatingService.dPaused ? "Paused " : "") + FloatingService.dText;
+            } else {
+                List<Presets.Preset> list = QuickStartActivity.visiblePresets(Prefs.get(this));
+                sub = list.isEmpty() ? "Tap to open" : "Start " + list.get(0).name;
+            }
+            t.setSubtitle(sub);
+        }
+        t.updateTile();
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/StockView.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.view.View;
+
+/** The stock-style graph of recent days, with a dashed goal level and a tag with the latest value. */
+final class StockView extends View {
+    int[] secs = new int[14];
+    int goalSec = 3600;
+    int lineColor = Charts.BLUE;
+    int surface = 0xFF171C25;
+    int textColor = Charts.MUTED;
+    int tagBg = 0xFF2A3140;
+    int tagText = 0xFFC7CCD8;
+
+    StockView(Context c) {
+        super(c);
+    }
+
+    @Override
+    protected void onDraw(Canvas c) {
+        float d = getResources().getDisplayMetrics().density;
+        Charts.Style st = new Charts.Style();
+        st.fs = 11f * d;
+        st.dot = 3.4f * d;
+        st.line = 2.6f * d;
+        st.tags = true;
+        st.grid = true;
+        st.lineColor = lineColor;
+        st.surface = surface;
+        st.textColor = textColor;
+        st.tagBg = tagBg;
+        st.tagText = tagText;
+        Charts.stock(c, 0f, 0f, getWidth(), getHeight(), secs, goalSec, st);
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/WatchuWidget.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.app.PendingIntent;
+import android.appwidget.AppWidgetManager;
+import android.appwidget.AppWidgetProvider;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.os.Bundle;
+import android.view.View;
+import android.widget.RemoteViews;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The home-screen widget: today's ring, the weekly change, a small stock-style graph, the exam countdown
+ * and three quick-start buttons. It refreshes when the app opens, when a session ends and every ~30 minutes.
+ */
+public class WatchuWidget extends AppWidgetProvider {
+    private static final int SURFACE = 0xFF171C25;
+    private static final int TEXT = 0xFFE6E9F0;
+    private static final int MUTED = 0xFF8C93A3;
+
+    @Override
+    public void onUpdate(Context ctx, AppWidgetManager mgr, int[] ids) {
+        for (int id : ids) push(ctx, mgr, id);
+    }
+
+    @Override
+    public void onAppWidgetOptionsChanged(Context ctx, AppWidgetManager mgr, int id, Bundle newOptions) {
+        push(ctx, mgr, id);
+    }
+
+    /** Redraws every Watchu widget on the home screen. Safe to call when there are none. */
+    static void refresh(Context ctx) {
+        try {
+            Context app = ctx.getApplicationContext();
+            AppWidgetManager mgr = AppWidgetManager.getInstance(app);
+            int[] ids = mgr.getAppWidgetIds(new ComponentName(app, WatchuWidget.class));
+            for (int id : ids) push(app, mgr, id);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void push(Context ctx, AppWidgetManager mgr, int id) {
+        try {
+            SharedPreferences p = Prefs.get(ctx);
+            Map<Integer, Integer> m = Stats.load(p);
+            int goal = Prefs.getInt(p, Prefs.GOAL_MIN) * 60;
+            int today = Stats.secs(m, Stats.cal(0));
+            int thisWeek = Stats.sumDays(m, -6, 0);
+            int lastWeek = Stats.sumDays(m, -13, -7);
+            int[] last14 = Stats.lastDays(m, 14);
+            int exam = Stats.examDays(p);
+            List<Presets.Preset> presets = QuickStartActivity.visiblePresets(p);
+            boolean buttons = !presets.isEmpty();
+
+            float d = ctx.getResources().getDisplayMetrics().density;
+            boolean land = ctx.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+            Bundle o = mgr.getAppWidgetOptions(id);
+            int wDp = o.getInt(land ? AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH
+                    : AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250);
+            int hDp = o.getInt(land ? AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT
+                    : AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 130);
+            if (wDp <= 0) wDp = 250;
+            if (hDp <= 0) hDp = 130;
+            int artW = Math.max(120, Math.min(1400, Math.round((wDp - 16) * d)));
+            int artH = Math.max(60, Math.min(800, Math.round((hDp - 16 - (buttons ? 38 : 0)) * d)));
+
+            Bitmap bmp = draw(artW, artH, d, goal, today, thisWeek, lastWeek, last14, exam);
+
+            RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget);
+            rv.setImageViewBitmap(R.id.w_art, bmp);
+            PendingIntent open = PendingIntent.getActivity(ctx, 99,
+                    new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            rv.setOnClickPendingIntent(R.id.w_art, open);
+            rv.setOnClickPendingIntent(R.id.w_root, open);
+
+            int[] btn = {R.id.w_b0, R.id.w_b1, R.id.w_b2};
+            rv.setViewVisibility(R.id.w_row, buttons ? View.VISIBLE : View.GONE);
+            for (int i = 0; i < 3; i++) {
+                if (i < presets.size()) {
+                    Intent in = new Intent(ctx, QuickStartActivity.class);
+                    in.putExtra(QuickStartActivity.EXTRA, "p" + i);
+                    in.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    PendingIntent pi = PendingIntent.getActivity(ctx, 100 + i, in,
+                            PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                    rv.setViewVisibility(btn[i], View.VISIBLE);
+                    rv.setTextViewText(btn[i], presets.get(i).name);
+                    rv.setOnClickPendingIntent(btn[i], pi);
+                } else {
+                    rv.setViewVisibility(btn[i], View.GONE);
+                }
+            }
+            mgr.updateAppWidget(id, rv);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static float fit(Paint p, String s, float size, float maxW) {
+        p.setTextSize(size);
+        float w = p.measureText(s);
+        return w > maxW && w > 0f ? size * maxW / w : size;
+    }
+
+    private static Bitmap draw(int w, int h, float d, int goal, int today, int thisWeek, int lastWeek,
+                               int[] last14, int exam) {
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        int pct = Stats.weekPct(thisWeek, lastWeek);
+        int tcol = Charts.trend(pct);
+
+        // today ring on the left
+        float leftW = Math.min(h, w * 0.30f);
+        float stroke = leftW * 0.10f;
+        float r = leftW / 2f - stroke * 0.75f;
+        float cx = leftW / 2f;
+        float cy = h / 2f;
+        float frac = goal > 0 ? Math.min(1f, today / (float) goal) : 0f;
+        Charts.ring(c, cx, cy, r, stroke, frac, Charts.status(today, goal), 0x33FFFFFF);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setStyle(Paint.Style.FILL);
+        String big = Stats.dur(today);
+        float bs = fit(p, big, r * 0.55f, r * 1.45f);
+        p.setTextSize(bs);
+        p.setColor(TEXT);
+        boolean small = r >= 26f * d;
+        c.drawText(big, cx, small ? cy : cy + bs * 0.35f, p);
+        if (small) {
+            p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            String of = "of " + Stats.dur(goal);
+            float ss = fit(p, of, r * 0.30f, r * 1.4f);
+            p.setTextSize(ss);
+            p.setColor(MUTED);
+            c.drawText(of, cx, cy + bs * 0.35f + ss * 1.25f, p);
+        }
+
+        // right side: weekly change and exam on top, graph below
+        float x0 = leftW + 10f * d;
+        float rw = w - x0 - 2f * d;
+        boolean graph = h >= 56f * d && rw >= 110f * d;
+        float topH = graph ? h * 0.36f : h;
+        float topCy = graph ? topH / 2f : h / 2f;
+
+        float exW = 0f;
+        if (exam >= 0) {
+            int ecol = Charts.status(thisWeek / 7, goal);
+            String et = exam == 0 ? "EXAM DAY" : "EXAM " + exam + "d";
+            float bh = Math.min(topH * 0.86f, 26f * d);
+            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            float es = bh * 0.46f;
+            p.setTextSize(es);
+            float tw = p.measureText(et);
+            exW = tw + bh * 0.9f;
+            float ex1 = x0 + rw;
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(Charts.alpha(ecol, 0x33));
+            c.drawRoundRect(new RectF(ex1 - exW, topCy - bh / 2f, ex1, topCy + bh / 2f), bh / 2f, bh / 2f, p);
+            p.setColor(ecol);
+            p.setTextAlign(Paint.Align.CENTER);
+            c.drawText(et, ex1 - exW / 2f, topCy + es * 0.35f, p);
+        }
+
+        float avail = rw - (exW > 0f ? exW + 8f * d : 0f);
+        float px = x0;
+        float ps = Math.min(topH * 0.62f, 30f * d);
+        if (pct != Stats.NO_PCT && pct != 0) {
+            float tsz = ps * 0.62f;
+            Path tri = new Path();
+            if (pct > 0) {
+                tri.moveTo(px, topCy + tsz / 2f);
+                tri.lineTo(px + tsz, topCy + tsz / 2f);
+                tri.lineTo(px + tsz / 2f, topCy - tsz / 2f);
+            } else {
+                tri.moveTo(px, topCy - tsz / 2f);
+                tri.lineTo(px + tsz, topCy - tsz / 2f);
+                tri.lineTo(px + tsz / 2f, topCy + tsz / 2f);
+            }
+            tri.close();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(tcol);
+            c.drawPath(tri, p);
+            px += tsz + 5f * d;
+            avail -= tsz + 5f * d;
+        }
+        String pt = Stats.pctText(pct);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        float pfs = fit(p, pt, ps, Math.max(20f * d, avail * 0.62f));
+        p.setTextSize(pfs);
+        p.setColor(tcol);
+        p.setTextAlign(Paint.Align.LEFT);
+        c.drawText(pt, px, topCy + pfs * 0.35f, p);
+        float pw = p.measureText(pt);
+        String vs = "vs last week";
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        float vsz = Math.min(pfs * 0.42f, 11f * d);
+        p.setTextSize(vsz);
+        if (vsz >= 7f * d && p.measureText(vs) < avail - pw - 6f * d) {
+            p.setColor(MUTED);
+            c.drawText(vs, px + pw + 6f * d, topCy + vsz * 0.35f, p);
+        }
+
+        if (graph) {
+            Charts.Style st = new Charts.Style();
+            st.fs = Math.max(8f * d, h * 0.10f);
+            st.dot = Math.max(1.6f * d, h * 0.022f);
+            st.line = Math.max(1.6f * d, h * 0.03f);
+            st.tags = false;
+            st.grid = false;
+            st.lineColor = tcol;
+            st.surface = SURFACE;
+            st.textColor = MUTED;
+            float gt = topH + 2f * d;
+            Charts.stock(c, x0, gt, rw, h - gt, last14, goal, st);
+        }
+        return bmp;
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/java/com/floaty/timer'
+cat > 'app/src/main/java/com/floaty/timer/WhatsNew.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.SharedPreferences;
+
+/** The one-time "What's new" dialog after an update, and the "More tips" page. */
+final class WhatsNew {
+    /** Raise this by one with every update that has news to show. */
+    static final int VERSION = 12;
+
+    private WhatsNew() {
+    }
+
+    private static final String NEWS = ""
+            + "• New report card: exam days left, this week against last week, and a stock-style graph.\n\n"
+            + "• The same graph on the Stats tab. Green means goal met, amber means half or more, "
+            + "red means under half.\n\n"
+            + "• New home-screen widget with today's ring, the weekly change, the graph and "
+            + "three quick-start buttons.\n\n"
+            + "• New Quick Settings tile. Tap to start, tap again to pause.\n\n"
+            + "• A shorter tutorial, and a More tips page in Settings.";
+
+    private static final String TIPS = ""
+            + "• Pomodoro: hold the bubble once to restart the step you are in. Hold again within "
+            + "5 seconds to reset everything.\n\n"
+            + "• When a Pomodoro break starts, tap the bubble within 10 seconds to skip it.\n\n"
+            + "• The notification has Pause or Resume and Stop, plus Skip break during a break.\n\n"
+            + "• Hold the app icon on your home screen for quick presets and Desk mode.\n\n"
+            + "• Widget: long-press your home screen, choose Widgets, then Watchu. Its three buttons "
+            + "start your first three presets.\n\n"
+            + "• Tile: open Quick Settings, tap the pencil and drag Watchu in. Tap to start, tap again "
+            + "to pause, hold to open the app.\n\n"
+            + "• Exam colours: green when your last 7 days average meets your daily goal, amber from "
+            + "half of it, red below half.\n\n"
+            + "• Desk mode is at the bottom of the Timer tab.\n\n"
+            + "• On the Stats tab, Share report card sends a picture of your week.";
+
+    private static AlertDialog.Builder builder(Activity a, boolean dark) {
+        return new AlertDialog.Builder(a, dark
+                ? android.R.style.Theme_DeviceDefault_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Light_Dialog_Alert);
+    }
+
+    /** Shows the news once per update. A brand new install marks it as seen without showing it. */
+    static void showIfNew(Activity a, SharedPreferences p, boolean dark) {
+        if (Prefs.getInt(p, Prefs.WHATS_SEEN) >= VERSION) return;
+        p.edit().putInt(Prefs.WHATS_SEEN, VERSION).apply();
+        showNews(a, dark);
+    }
+
+    static void showNews(Activity a, boolean dark) {
+        builder(a, dark).setTitle("What's new").setMessage(NEWS).setPositiveButton("Got it", null).show();
+    }
+
+    static void showTips(Activity a, boolean dark) {
+        builder(a, dark).setTitle("More tips").setMessage(TIPS).setPositiveButton("Got it", null).show();
+    }
+}
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/ic_tile.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M3,12 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 M12,7 L12,12 L15.5,14"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2" />
+</vector>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/widget_bg.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#171C25" />
+    <corners android:radius="20dp" />
+</shape>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/drawable'
+cat > 'app/src/main/res/drawable/widget_btn.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#2A3140" />
+    <corners android:radius="16dp" />
+</shape>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/layout'
+cat > 'app/src/main/res/layout/widget.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <ImageView
+        android:id="@+id/w_art"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:contentDescription="@string/app_name"
+        android:scaleType="fitCenter" />
+
+    <LinearLayout
+        android:id="@+id/w_row"
+        android:layout_width="match_parent"
+        android:layout_height="32dp"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/w_b0"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_btn"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:textColor="#A9C5FF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/w_b1"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_btn"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:textColor="#A9C5FF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/w_b2"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_btn"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:textColor="#A9C5FF"
+            android:textSize="12sp" />
+    </LinearLayout>
+</LinearLayout>
+FLOATY_EOF
+mkdir -p 'app/src/main/res/xml'
+cat > 'app/src/main/res/xml/widget_info.xml' <<'FLOATY_EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_desc"
+    android:initialLayout="@layout/widget"
+    android:minWidth="250dp"
+    android:minHeight="130dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />
 FLOATY_EOF
 cat > 'build.gradle' <<'FLOATY_EOF'
 plugins {
