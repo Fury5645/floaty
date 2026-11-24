@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.12'
+        versionName '1.13'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -2225,6 +2225,11 @@ public class MainActivity extends Activity {
         top.setPadding(dp(16), dp(6), dp(8), dp(6));
         topLeft = ui.horizontal();
         top.addView(topLeft, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        ImageView deskTop = ui.icon(R.drawable.ic_desk, 24, ui.variant);
+        deskTop.setPadding(dp(8), dp(8), dp(8), dp(8));
+        deskTop.setContentDescription("Desk mode");
+        deskTop.setOnClickListener(v -> openDesk());
+        top.addView(deskTop, new LinearLayout.LayoutParams(dp(44), dp(44)));
         ImageView gear = ui.icon(R.drawable.ic_gear, 24, ui.variant);
         gear.setPadding(dp(8), dp(8), dp(8), dp(8));
         gear.setContentDescription("Settings");
@@ -3933,7 +3938,8 @@ public class SettingsActivity extends Activity {
         c.addView(ui.text("Brightness", 16, ui.onSurface), ui.lp(MATCH, WRAP, 0, 6, 0, 8));
         c.addView(ui.segmented(new String[]{"Very dim", "Dim", "Normal"}, Prefs.getInt(p, Prefs.DESK_BRIGHT),
                 v -> p.edit().putInt(Prefs.DESK_BRIGHT, v).apply()), ui.lp(MATCH, ui.dp(40), 0, 0, 0, 6));
-        toggle(c, "Pure black background", "For AMOLED phones. Off gives a very dark grey.", Prefs.DESK_BLACK);
+        toggle(c, "Pure black background", "For AMOLED phones. Off gives a very dark grey. Always on with the AMOLED theme.",
+                Prefs.DESK_BLACK);
         toggle(c, "Slowly move the clock",
                 "Shifts it a little every minute to protect AMOLED phones from burn-in.", Prefs.DESK_MOVE);
 
@@ -3984,6 +3990,7 @@ public class SettingsActivity extends Activity {
         box.addView(ui.section("About"), ui.lp(MATCH, WRAP, 0, 20, 0, 6));
         box.addView(ui.text("Watchu " + versionText(), 16, ui.onSurface));
         box.addView(ui.text("Free for life. No ads. No premium.", 14, ui.variant), ui.lp(MATCH, WRAP, 0, 2, 0, 0));
+        box.addView(ui.text("Developed by SS", 14, ui.variant), ui.lp(MATCH, WRAP, 0, 2, 0, 0));
 
         setContentView(frame);
     }
@@ -4862,6 +4869,9 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.DisplayMetrics;
@@ -4873,7 +4883,12 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** Full-screen desk clock: a big copy of the bubble on a dark screen that stays on. */
+import java.util.Map;
+
+/**
+ * Full-screen desk clock: a big copy of the bubble on a dark screen that stays on.
+ * Tap the clock to pause or resume, hold it to restart, tap the empty space for the buttons.
+ */
 public class DeskActivity extends Activity {
     private static final float[] LEVELS = {0.03f, 0.12f, 0.35f, 0.7f, 1f};
 
@@ -4884,6 +4899,9 @@ public class DeskActivity extends Activity {
     private TextView toggleBtn;
     private TextView resetBtn;
     private TextView skipBtn;
+    private TextView info;
+    private TextView hint;
+    private long infoAt;
     private FrameLayout root;
     private int level;
     private long moveStep = -1L;
@@ -4892,6 +4910,13 @@ public class DeskActivity extends Activity {
         @Override
         public void run() {
             bar.setVisibility(View.GONE);
+        }
+    };
+
+    private final Runnable hideHint = new Runnable() {
+        @Override
+        public void run() {
+            hint.setVisibility(View.GONE);
         }
     };
 
@@ -4911,11 +4936,32 @@ public class DeskActivity extends Activity {
         w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         root = new FrameLayout(this);
-        root.setBackgroundColor(Prefs.getInt(p, Prefs.DESK_BLACK) == 1 ? Color.BLACK : 0xFF0A0C10);
+        boolean black = Prefs.getInt(p, Prefs.DESK_BLACK) == 1
+                || Ui.resolveTheme(this, p) == Prefs.THEME_AMOLED;
+        root.setBackgroundColor(black ? Color.BLACK : 0xFF0A0C10);
 
         bv = new BubbleView(this);
         root.addView(bv, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+
+        // today's progress and the exam countdown, under the clock
+        info = new TextView(this);
+        info.setTextSize(18f);
+        info.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        ilp.bottomMargin = dp(28);
+        root.addView(info, ilp);
+
+        // a short reminder of the gestures, gone after a few seconds
+        hint = new TextView(this);
+        hint.setTextSize(14f);
+        hint.setTextColor(0x99E6E9F0);
+        hint.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        hlp.topMargin = dp(28);
+        root.addView(hint, hlp);
 
         bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -4936,21 +4982,56 @@ public class DeskActivity extends Activity {
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
         bar.setVisibility(View.GONE);
 
-        root.setOnClickListener(v -> {
-            if (bar.getVisibility() == View.VISIBLE) {
-                bar.setVisibility(View.GONE);
-                handler.removeCallbacks(hideBar);
+        root.setOnClickListener(v -> toggleBar());
+        bv.setOnClickListener(v -> {
+            if (FloatingService.active && !FloatingService.dClock) {
+                command(FloatingService.ACTION_TOGGLE);
             } else {
-                bar.setVisibility(View.VISIBLE);
-                handler.removeCallbacks(hideBar);
-                handler.postDelayed(hideBar, 4000L);
+                toggleBar();
             }
+        });
+        bv.setOnLongClickListener(v -> {
+            if (FloatingService.active && !FloatingService.dClock) {
+                command(FloatingService.ACTION_RESET);
+                return true;
+            }
+            return false;
         });
         setContentView(root);
 
         int pref = Prefs.getInt(p, Prefs.DESK_BRIGHT);
         level = pref == 0 ? 0 : (pref == 1 ? 1 : 3);
         applyBrightness();
+    }
+
+    private void toggleBar() {
+        if (bar.getVisibility() == View.VISIBLE) {
+            bar.setVisibility(View.GONE);
+            handler.removeCallbacks(hideBar);
+        } else {
+            bar.setVisibility(View.VISIBLE);
+            handler.removeCallbacks(hideBar);
+            handler.postDelayed(hideBar, 4000L);
+        }
+    }
+
+    /** Today against the goal (coloured like the rest of the app) and days left to the exam. */
+    private void updateInfo() {
+        Map<Integer, Integer> m = Stats.load(p);
+        int goal = Prefs.getInt(p, Prefs.GOAL_MIN) * 60;
+        int today = Stats.secs(m, Stats.cal(0));
+        String a = "Today " + Stats.dur(today) + " of " + Stats.dur(goal);
+        SpannableStringBuilder sb = new SpannableStringBuilder(a);
+        sb.setSpan(new ForegroundColorSpan(Charts.alpha(Charts.status(today, goal), 0xCC)), 0, a.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        int ex = Stats.examDays(p);
+        if (ex >= 0) {
+            String b = "   \u00B7   " + (ex == 0 ? "Exam day" : "Exam in " + ex + (ex == 1 ? " day" : " days"));
+            int start = sb.length();
+            sb.append(b);
+            sb.setSpan(new ForegroundColorSpan(0xCC8C93A3), start, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        info.setText(sb);
     }
 
     private int dp(float v) {
@@ -5014,6 +5095,13 @@ public class DeskActivity extends Activity {
         immersive();
         bv.applyPrefs(p);
         fit();
+        updateInfo();
+        infoAt = System.currentTimeMillis();
+        hint.setText(FloatingService.dClock ? "Tap anywhere for buttons"
+                : "Tap the clock to pause  \u00B7  Hold to restart  \u00B7  Tap the empty space for buttons");
+        hint.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideHint);
+        handler.postDelayed(hideHint, 6000L);
         handler.post(poll);
     }
 
@@ -5021,6 +5109,7 @@ public class DeskActivity extends Activity {
     protected void onStop() {
         handler.removeCallbacks(poll);
         handler.removeCallbacks(hideBar);
+        handler.removeCallbacks(hideHint);
         if (FloatingService.active) command(FloatingService.ACTION_DESK_OFF);
         super.onStop();
     }
@@ -5052,6 +5141,11 @@ public class DeskActivity extends Activity {
     }
 
     private void show() {
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - infoAt > 5000L) {
+            infoAt = nowMs;
+            updateInfo();
+        }
         if (!FloatingService.active) {
             bv.setPaused(false);
             bv.setState("--:--", null, -1f, 0, false);
@@ -5082,6 +5176,7 @@ public class DeskActivity extends Activity {
                 float rx = Math.max(0f, root.getWidth() - bv.getWidth()) / 2f * 0.9f;
                 float ry = Math.max(0f, root.getHeight() - bv.getHeight()) / 2f * 0.9f;
                 bv.animate().translationX(sp[0] * rx).translationY(sp[1] * ry).setDuration(2500L).start();
+                info.animate().translationX(sp[0] * rx * 0.5f).setDuration(2500L).start();
             }
         }
     }
@@ -5097,7 +5192,7 @@ cat > 'app/src/main/res/drawable/ic_desk.xml' <<'FLOATY_EOF'
     android:viewportHeight="24">
     <path
         android:fillColor="#00000000"
-        android:pathData="M5,4 h14 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z M9,21 h6 M12,17 v4"
+        android:pathData="M5,4 h14 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z M9,21 h6 M12,17 v4 M12,7 v3.2 l2.2,1.4"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
@@ -6222,34 +6317,57 @@ import android.content.SharedPreferences;
 /** The one-time "What's new" dialog after an update, and the "More tips" page. */
 final class WhatsNew {
     /** Raise this by one with every update that has news to show. */
-    static final int VERSION = 12;
+    static final int VERSION = 13;
 
     private WhatsNew() {
     }
 
-    private static final String NEWS = ""
-            + "• New report card: exam days left, this week against last week, and a stock-style graph.\n\n"
-            + "• The same graph on the Stats tab. Green means goal met, amber means half or more, "
-            + "red means under half.\n\n"
-            + "• New home-screen widget with today's ring, the weekly change, the graph and "
-            + "three quick-start buttons.\n\n"
-            + "• New Quick Settings tile. Tap to start, tap again to pause.\n\n"
-            + "• A shorter tutorial, and a More tips page in Settings.";
+    /** News per update, newest first. VERSIONS[i] goes with NEWS[i]. */
+    private static final int[] VERSIONS = {13, 12};
+
+    private static final String[] NEWS = {
+            "\u2022 Desk mode: tap the clock to pause or resume, hold it to restart. Tap the empty space "
+                    + "for the buttons.\n\n"
+                    + "\u2022 Desk mode now shows today's progress and the exam countdown under the clock.\n\n"
+                    + "\u2022 Desk mode is pure black with the AMOLED theme.\n\n"
+                    + "\u2022 New Desk mode shortcut icon at the top, next to Settings.",
+            "\u2022 New report card: exam days left, this week against last week, and a stock-style graph.\n\n"
+                    + "\u2022 The same graph on the Stats tab. Green means goal met, amber means half or more, "
+                    + "red means under half.\n\n"
+                    + "\u2022 New home-screen widget with today's ring, the weekly change, the graph and "
+                    + "three quick-start buttons.\n\n"
+                    + "\u2022 New Quick Settings tile. Tap to start, tap again to pause.\n\n"
+                    + "\u2022 A shorter tutorial, and a More tips page in Settings."};
 
     private static final String TIPS = ""
-            + "• Pomodoro: hold the bubble once to restart the step you are in. Hold again within "
+            + "\u2022 Pomodoro: hold the bubble once to restart the step you are in. Hold again within "
             + "5 seconds to reset everything.\n\n"
-            + "• When a Pomodoro break starts, tap the bubble within 10 seconds to skip it.\n\n"
-            + "• The notification has Pause or Resume and Stop, plus Skip break during a break.\n\n"
-            + "• Hold the app icon on your home screen for quick presets and Desk mode.\n\n"
-            + "• Widget: long-press your home screen, choose Widgets, then Watchu. Its three buttons "
+            + "\u2022 When a Pomodoro break starts, tap the bubble within 10 seconds to skip it.\n\n"
+            + "\u2022 The notification has Pause or Resume and Stop, plus Skip break during a break.\n\n"
+            + "\u2022 Hold the app icon on your home screen for quick presets and Desk mode.\n\n"
+            + "\u2022 Widget: long-press your home screen, choose Widgets, then Watchu. Its three buttons "
             + "start your first three presets.\n\n"
-            + "• Tile: open Quick Settings, tap the pencil and drag Watchu in. Tap to start, tap again "
+            + "\u2022 Tile: open Quick Settings, tap the pencil and drag Watchu in. Tap to start, tap again "
             + "to pause, hold to open the app.\n\n"
-            + "• Exam colours: green when your last 7 days average meets your daily goal, amber from "
+            + "\u2022 Exam colours: green when your last 7 days average meets your daily goal, amber from "
             + "half of it, red below half.\n\n"
-            + "• Desk mode is at the bottom of the Timer tab.\n\n"
-            + "• On the Stats tab, Share report card sends a picture of your week.";
+            + "\u2022 Desk mode: open it from the icon at the top or the button at the bottom of the Timer "
+            + "tab. Tap the clock to pause or resume, hold it to restart, tap the empty space for buttons.\n\n"
+            + "\u2022 On the Stats tab, Share report card sends a picture of your week.";
+
+    /** The news newer than version "seen", newest first. With more than one update, each gets a heading. */
+    private static String newsSince(int seen) {
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (int v : VERSIONS) if (v > seen) count++;
+        for (int i = 0; i < VERSIONS.length; i++) {
+            if (VERSIONS[i] <= seen) continue;
+            if (sb.length() > 0) sb.append("\n\n\n");
+            if (count > 1) sb.append("Version 1.").append(VERSIONS[i]).append("\n\n");
+            sb.append(NEWS[i]);
+        }
+        return sb.toString();
+    }
 
     private static AlertDialog.Builder builder(Activity a, boolean dark) {
         return new AlertDialog.Builder(a, dark
@@ -6260,16 +6378,22 @@ final class WhatsNew {
     /** Shows the news once per update. A brand new install marks it as seen without showing it. */
     static void showIfNew(Activity a, SharedPreferences p, boolean dark) {
         if (Prefs.getInt(p, Prefs.WHATS_SEEN) >= VERSION) return;
+        String text = newsSince(Prefs.getInt(p, Prefs.WHATS_SEEN));
         p.edit().putInt(Prefs.WHATS_SEEN, VERSION).apply();
-        showNews(a, dark);
+        show(a, dark, "What's new", text);
     }
 
+    /** From Settings: everything that changed, newest first. */
     static void showNews(Activity a, boolean dark) {
-        builder(a, dark).setTitle("What's new").setMessage(NEWS).setPositiveButton("Got it", null).show();
+        show(a, dark, "What's new", newsSince(0));
+    }
+
+    private static void show(Activity a, boolean dark, String title, String text) {
+        builder(a, dark).setTitle(title).setMessage(text).setPositiveButton("Got it", null).show();
     }
 
     static void showTips(Activity a, boolean dark) {
-        builder(a, dark).setTitle("More tips").setMessage(TIPS).setPositiveButton("Got it", null).show();
+        show(a, dark, "More tips", TIPS);
     }
 }
 FLOATY_EOF
