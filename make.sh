@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.14'
+        versionName '1.15'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -2403,6 +2403,7 @@ public class MainActivity extends Activity {
     }
 
     private void fillTimer() {
+        Prefs.clampBreaks(p);
         timerBox.removeAllViews();
         timerBox.addView(makePreviewCard(true), lp(MATCH, WRAP, 0, 0, 0, 14));
         buildPresets(timerBox);
@@ -2429,9 +2430,9 @@ public class MainActivity extends Activity {
         } else if (mode == Prefs.MODE_POMODORO) {
             card.addView(stepper("Focus", Prefs.POMO_WORK, 1, 180, 1, "min", N_CONFIG));
             card.addView(divider());
-            card.addView(stepper("Short break", Prefs.POMO_SHORT, 1, 60, 1, "min", N_CONFIG));
+            card.addView(stepper("Short break", Prefs.POMO_SHORT, 1, Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1 ? Prefs.maxShort(p) : 60, 1, "min", N_CONFIG));
             card.addView(divider());
-            card.addView(stepper("Long break", Prefs.POMO_LONG, 1, 120, 1, "min", N_CONFIG));
+            card.addView(stepper("Long break", Prefs.POMO_LONG, 1, Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1 ? Prefs.maxLong(p) : 120, 1, "min", N_CONFIG));
             card.addView(divider());
             card.addView(stepper("Rounds before long break", Prefs.POMO_ROUNDS, 1, 12, 1, "", N_CONFIG));
             if (Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1) {
@@ -2528,6 +2529,7 @@ public class MainActivity extends Activity {
                     }
                     p.edit().putInt(key, v).apply();
                     value.setText(valueText(v, unit));
+                    if (key.startsWith("pomo_") && Prefs.clampBreaks(p)) fillTimer();
                     changed(notify);
                 })
                 .setNegativeButton("Cancel", null).show();
@@ -2539,6 +2541,7 @@ public class MainActivity extends Activity {
         if (v > max) v = max;
         p.edit().putInt(key, v).apply();
         value.setText(valueText(v, unit));
+        if (key.startsWith("pomo_") && Prefs.clampBreaks(p)) fillTimer();
         changed(notify);
     }
 
@@ -3651,9 +3654,21 @@ final class Prefs {
         return p.getInt(key, defaultFor(key));
     }
 
-    /** Longest short break allowed: a quarter of the focus time, at least 1 minute. */
+    /** Longest short break allowed: a fifth of the focus time, at least 1 minute. */
     static int maxShort(SharedPreferences p) {
-        return Math.max(1, getInt(p, POMO_WORK) / 4);
+        return Math.max(1, getInt(p, POMO_WORK) / 5);
+    }
+
+    /** Pulls saved break lengths down to the limits. Returns true if anything changed. */
+    static boolean clampBreaks(SharedPreferences p) {
+        if (getInt(p, LIMIT_BREAKS) != 1) return false;
+        int s = getInt(p, POMO_SHORT);
+        int l = getInt(p, POMO_LONG);
+        int ns = Math.min(s, maxShort(p));
+        int nl = Math.min(l, maxLong(p));
+        if (ns == s && nl == l) return false;
+        p.edit().putInt(POMO_SHORT, ns).putInt(POMO_LONG, nl).apply();
+        return true;
     }
 
     /** Longest long break allowed: the focus time, at most 30 minutes. */
@@ -3969,7 +3984,7 @@ public class SettingsActivity extends Activity {
                 Prefs.MOTION_PAUSE);
 
         toggle(c, "Limit Pomodoro breaks",
-                "Short breaks up to a quarter of focus time, long breaks up to the focus time (max 30 min).",
+                "Short breaks up to a fifth of focus time, long breaks up to the focus time (max 30 min).",
                 Prefs.LIMIT_BREAKS);
 
         // Help
@@ -6256,20 +6271,22 @@ import android.content.SharedPreferences;
 /** The one-time "What's new" dialog after an update, and the "More tips" page. */
 final class WhatsNew {
     /** Raise this by one with every update that has news to show. */
-    static final int VERSION = 14;
+    static final int VERSION = 15;
 
     private WhatsNew() {
     }
 
     /** News per update, newest first. VERSIONS[i] goes with NEWS[i]. */
-    private static final int[] VERSIONS = {14, 13, 12};
+    private static final int[] VERSIONS = {15, 14, 13, 12};
 
     private static final String[] NEWS = {
+            "\u2022 Pomodoro break limit is now a fifth of your focus time (25 min focus gives 5 min breaks). "
+                    + "The break boxes stop at the limit and shorten themselves when you lower focus time.",
             "\u2022 New widget: ring, exam countdown, this week, change vs last week and a graph. Resize it "
                     + "for a bigger or smaller view.\n\n"
                     + "\u2022 Brighter colours and weekday names on the graph, the Stats tab and the report card.\n\n"
                     + "\u2022 The tile and widget buttons no longer pull the app to the front.\n\n"
-                    + "\u2022 Pomodoro breaks are now limited: short up to a quarter of focus, long up to the "
+                    + "\u2022 Pomodoro breaks are now limited: short up to a fifth of focus, long up to the "
                     + "focus time (max 30 min). Turn it off in Settings.\n\n"
                     + "\u2022 Settings: Download link and Share app link.",
             "\u2022 Desk mode: tap the clock to pause or resume, hold it to restart. Tap the empty space "
@@ -6286,7 +6303,7 @@ final class WhatsNew {
                     + "\u2022 A shorter tutorial, and a More tips page in Settings."};
 
     private static final String TIPS = ""
-            + "\u2022 Pomodoro breaks are capped (a quarter of focus for short ones). For longer rests use "
+            + "\u2022 Pomodoro breaks are capped (a fifth of focus for short ones). For longer rests use "
             + "Timer, or turn the limit off in Settings.\n\n"
             + "\u2022 Pomodoro: hold the bubble once to restart the step you are in. Hold again within "
             + "5 seconds to reset everything.\n\n"
