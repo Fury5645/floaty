@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.13'
+        versionName '1.14'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -85,6 +85,7 @@ cat > 'app/src/main/AndroidManifest.xml' <<'FLOATY_EOF'
             android:name=".QuickStartActivity"
             android:exported="false"
             android:excludeFromRecents="true"
+            android:taskAffinity=""
             android:theme="@android:style/Theme.NoDisplay" />
 
         <activity
@@ -672,7 +673,6 @@ class BubbleView extends View {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/ColorSlider.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -762,7 +762,6 @@ class ColorSlider extends View {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/FloatingService.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -1387,8 +1386,10 @@ public class FloatingService extends Service {
             minutes = Prefs.getInt(prefs, Prefs.POMO_WORK);
         } else if (ph == PHASE_SHORT) {
             minutes = Prefs.getInt(prefs, Prefs.POMO_SHORT);
+            if (Prefs.getInt(prefs, Prefs.LIMIT_BREAKS) == 1) minutes = Math.min(minutes, Prefs.maxShort(prefs));
         } else {
             minutes = Prefs.getInt(prefs, Prefs.POMO_LONG);
+            if (Prefs.getInt(prefs, Prefs.LIMIT_BREAKS) == 1) minutes = Math.min(minutes, Prefs.maxLong(prefs));
         }
         return Math.max(1, minutes) * 60000L;
     }
@@ -1788,7 +1789,6 @@ public class FloatingService extends Service {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/FlowLayout.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -1861,7 +1861,6 @@ class FlowLayout extends ViewGroup {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/GuideActivity.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -2034,7 +2033,6 @@ public class GuideActivity extends Activity {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/MainActivity.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -2436,6 +2434,17 @@ public class MainActivity extends Activity {
             card.addView(stepper("Long break", Prefs.POMO_LONG, 1, 120, 1, "min", N_CONFIG));
             card.addView(divider());
             card.addView(stepper("Rounds before long break", Prefs.POMO_ROUNDS, 1, 12, 1, "", N_CONFIG));
+            if (Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1) {
+                int ms = Prefs.maxShort(p);
+                int ml = Prefs.maxLong(p);
+                boolean over = Prefs.getInt(p, Prefs.POMO_SHORT) > ms || Prefs.getInt(p, Prefs.POMO_LONG) > ml;
+                TextView note = ui.text((over ? "Breaks over " + ms + " min (long: " + ml + " min) are not Pomodoro, "
+                        + "so they are shortened. Use Timer for longer rests."
+                        : "Breaks are capped at " + ms + " min, long breaks at " + ml + " min. Change in Settings."),
+                        13, ui.variant);
+                note.setPadding(0, dp(8), 0, dp(8));
+                card.addView(note);
+            }
         } else {
             if (Prefs.getInt(p, Prefs.LOOK) == 0) {
                 card.addView(ui.switchRow("24-hour clock", null, Prefs.getInt(p, Prefs.CLOCK_24) == 1,
@@ -3160,12 +3169,10 @@ public class MainActivity extends Activity {
         StockView sv = new StockView(this);
         sv.goalSec = goal;
         sv.secs = Stats.lastDays(m, 14);
-        sv.lineColor = wkCol;
         sv.surface = ui.container;
         sv.textColor = ui.variant;
-        sv.tagBg = ui.high;
-        sv.tagText = ui.onSurface;
-        c3.addView(sv, lp(MATCH, dp(190), 0, 0, 0, 6));
+        sv.textStrong = ui.onSurface;
+        c3.addView(sv, lp(MATCH, dp(220), 0, 0, 0, 6));
         c3.addView(ui.text("Green: goal met. Amber: half or more. Red: under half. Dashed line: your goal.", 12,
                 ui.variant));
         statsBox.addView(c3, lp(MATCH, WRAP, 0, 0, 0, 12));
@@ -3325,7 +3332,7 @@ public class MainActivity extends Activity {
         int[] last14 = new int[14];
         for (int i = 0; i < 14; i++) last14[i] = Stats.secs(m, Stats.cal(i - 13));
         String text = "My Watchu report: " + Stats.dur(today) + " of " + Stats.dur(goal) + " today, "
-                + streak + "-day streak, " + stars + " star" + (stars == 1 ? "" : "s") + ". Watchu is free for life.";
+                + streak + "-day streak, " + stars + " star" + (stars == 1 ? "" : "s") + ". Watchu is free for life. Get it: https://github.com/Fury5645/floaty/releases/latest";
         Intent send = new Intent(Intent.ACTION_SEND);
         try {
             if (android.os.Build.VERSION.SDK_INT >= 29) {
@@ -3520,7 +3527,6 @@ public class MainActivity extends Activity {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/Prefs.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -3607,6 +3613,7 @@ final class Prefs {
     static final String FADE = "fade_idle";
     static final String AUTONEXT = "auto_next";
     static final String SKIPPROMPT = "skip_prompt";
+    static final String LIMIT_BREAKS = "limit_breaks";
     static final String CYCLES = "cycle_counter";
     static final String GUIDE_SEEN = "guide_seen";
     static final String WHATS_SEEN = "whats_seen";
@@ -3642,6 +3649,16 @@ final class Prefs {
 
     static int getInt(SharedPreferences p, String key) {
         return p.getInt(key, defaultFor(key));
+    }
+
+    /** Longest short break allowed: a quarter of the focus time, at least 1 minute. */
+    static int maxShort(SharedPreferences p) {
+        return Math.max(1, getInt(p, POMO_WORK) / 4);
+    }
+
+    /** Longest long break allowed: the focus time, at most 30 minutes. */
+    static int maxLong(SharedPreferences p) {
+        return Math.max(1, Math.min(getInt(p, POMO_WORK), 30));
     }
 
     static int defaultFor(String key) {
@@ -3684,6 +3701,7 @@ final class Prefs {
             case FADE: return 0;
             case AUTONEXT: return 0;
             case SKIPPROMPT: return 0;
+            case LIMIT_BREAKS: return 1;
             case CYCLES: return 0;
             case GUIDE_SEEN: return 0;
             case TIMER_SECS: return 1;
@@ -3694,7 +3712,6 @@ final class Prefs {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/Presets.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -3832,7 +3849,6 @@ final class Presets {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/SettingsActivity.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -3952,6 +3968,10 @@ public class SettingsActivity extends Activity {
                 "Pauses while the phone is picked up or moved, resumes after 5 still seconds.",
                 Prefs.MOTION_PAUSE);
 
+        toggle(c, "Limit Pomodoro breaks",
+                "Short breaks up to a quarter of focus time, long breaks up to the focus time (max 30 min).",
+                Prefs.LIMIT_BREAKS);
+
         // Help
         box.addView(ui.section("Help"), ui.lp(MATCH, WRAP, 0, 16, 0, 2));
         c = card(box);
@@ -3990,6 +4010,17 @@ public class SettingsActivity extends Activity {
         box.addView(ui.section("About"), ui.lp(MATCH, WRAP, 0, 20, 0, 6));
         box.addView(ui.text("Watchu " + versionText(), 16, ui.onSurface));
         box.addView(ui.text("Free for life. No ads. No premium.", 14, ui.variant), ui.lp(MATCH, WRAP, 0, 2, 0, 0));
+        LinearLayout lk = card(box);
+        lk.addView(linkRow(R.drawable.ic_download, "Download link", "Opens the Watchu download page",
+                v -> openLink("https://github.com/Fury5645/floaty/releases/latest")));
+        lk.addView(linkRow(R.drawable.ic_mail, "Share app link", "Send the download link to a friend",
+                v -> {
+                    Intent s = new Intent(Intent.ACTION_SEND);
+                    s.setType("text/plain");
+                    s.putExtra(Intent.EXTRA_TEXT, "Watchu, a free floating timer. No ads, no premium. "
+                            + "https://github.com/Fury5645/floaty/releases/latest");
+                    startActivity(Intent.createChooser(s, "Share Watchu"));
+                }));
         box.addView(ui.text("Developed by SS", 14, ui.variant), ui.lp(MATCH, WRAP, 0, 2, 0, 0));
 
         setContentView(frame);
@@ -4077,7 +4108,6 @@ public class SettingsActivity extends Activity {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/Ui.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -4421,7 +4451,6 @@ cat > 'app/src/main/res/drawable/ic_back.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_check.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4438,7 +4467,6 @@ cat > 'app/src/main/res/drawable/ic_check.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_download.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4455,7 +4483,6 @@ cat > 'app/src/main/res/drawable/ic_download.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_edit.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4472,7 +4499,6 @@ cat > 'app/src/main/res/drawable/ic_edit.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_fg.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4502,7 +4528,6 @@ cat > 'app/src/main/res/drawable/ic_fg.xml' <<'FLOATY_EOF'
         android:pathData="M63.66,38.88 a3.78,3.78 0 1,0 7.56,0 a3.78,3.78 0 1,0 -7.56,0" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_gear.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4519,7 +4544,6 @@ cat > 'app/src/main/res/drawable/ic_gear.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_help.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4536,7 +4560,6 @@ cat > 'app/src/main/res/drawable/ic_help.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_logo.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4569,7 +4592,6 @@ cat > 'app/src/main/res/drawable/ic_logo.xml' <<'FLOATY_EOF'
         android:pathData="M21.5,10.5 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_mail.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4586,7 +4608,6 @@ cat > 'app/src/main/res/drawable/ic_mail.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_nav_stats.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4603,7 +4624,6 @@ cat > 'app/src/main/res/drawable/ic_nav_stats.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_nav_style.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4620,7 +4640,6 @@ cat > 'app/src/main/res/drawable/ic_nav_style.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_nav_timer.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4637,7 +4656,6 @@ cat > 'app/src/main/res/drawable/ic_nav_timer.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_play.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4650,7 +4668,6 @@ cat > 'app/src/main/res/drawable/ic_play.xml' <<'FLOATY_EOF'
         android:pathData="M8,5 v14 l11,-7 z" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_plus.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4667,7 +4684,6 @@ cat > 'app/src/main/res/drawable/ic_plus.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_shape_circle.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4684,7 +4700,6 @@ cat > 'app/src/main/res/drawable/ic_shape_circle.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_shape_pill.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4701,7 +4716,6 @@ cat > 'app/src/main/res/drawable/ic_shape_pill.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_shape_squircle.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4718,7 +4732,6 @@ cat > 'app/src/main/res/drawable/ic_shape_squircle.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_shield.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4735,7 +4748,6 @@ cat > 'app/src/main/res/drawable/ic_shield.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_stop.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4748,7 +4760,6 @@ cat > 'app/src/main/res/drawable/ic_stop.xml' <<'FLOATY_EOF'
         android:pathData="M7,7 h10 v10 H7 z" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/wm_main.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4761,7 +4772,6 @@ cat > 'app/src/main/res/drawable/wm_main.xml' <<'FLOATY_EOF'
         android:pathData="M1028 58 845 760H638L526 298L410 760H203L25 58H208L309 569L434 58H622L742 569L844 58ZM1326 194Q1385 194 1429.5 218Q1474 242 1498 281V202H1669V760H1498V681Q1473 720 1428.5 744Q1384 768 1325 768Q1257 768 1201 732.5Q1145 697 1112.5 631.5Q1080 566 1080 480Q1080 394 1112.5 329Q1145 264 1201 229Q1257 194 1326 194ZM1376 343Q1325 343 1289.5 379.5Q1254 416 1254 480Q1254 544 1289.5 581.5Q1325 619 1376 619Q1427 619 1462.5 582Q1498 545 1498 481Q1498 417 1462.5 380Q1427 343 1376 343ZM2104 615V760H2017Q1924 760 1872 714.5Q1820 669 1820 566V344H1752V202H1820V66H1991V202H2103V344H1991V568Q1991 593 2003 604Q2015 615 2043 615ZM2445 194Q2550 194 2620.5 249Q2691 304 2713 404H2531Q2508 340 2442 340Q2395 340 2367 376.5Q2339 413 2339 481Q2339 549 2367 585.5Q2395 622 2442 622Q2508 622 2531 558H2713Q2691 656 2620 712Q2549 768 2445 768Q2363 768 2299.5 733Q2236 698 2200.5 633Q2165 568 2165 481Q2165 394 2200.5 329Q2236 264 2299.5 229Q2363 194 2445 194ZM3359 434V760H3189V457Q3189 401 3160 370Q3131 339 3082 339Q3033 339 3004 370Q2975 401 2975 457V760H2804V20H2975V277Q3001 240 3046 218Q3091 196 3147 196Q3243 196 3301 259.5Q3359 323 3359 434Z" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/wm_u.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4791,7 +4801,6 @@ cat > 'app/src/main/res/values/strings.xml' <<'FLOATY_EOF'
     <string name="widget_desc">Progress today, weekly change, exam countdown and quick-start buttons</string>
 </resources>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_sound_off.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4808,7 +4817,6 @@ cat > 'app/src/main/res/drawable/ic_sound_off.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_sound_on.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4825,7 +4833,6 @@ cat > 'app/src/main/res/drawable/ic_sound_on.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_vib_off.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4842,7 +4849,6 @@ cat > 'app/src/main/res/drawable/ic_vib_off.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_vib_on.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -4859,7 +4865,6 @@ cat > 'app/src/main/res/drawable/ic_vib_on.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/DeskActivity.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -5182,7 +5187,6 @@ public class DeskActivity extends Activity {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_desk.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -5199,7 +5203,6 @@ cat > 'app/src/main/res/drawable/ic_desk.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/ReportCard.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -5347,17 +5350,18 @@ final class ReportCard {
         text(c, p, tw2, 964 - pw / 2f, 834, 28, tcol, true, Paint.Align.CENTER);
 
         Charts.Style st = new Charts.Style();
-        st.fs = 26;
+        st.fs = 24;
         st.dot = 7;
         st.line = 6;
-        st.tags = true;
-        st.grid = true;
-        st.lineColor = tcol;
+        st.axis = true;
+        st.tag = true;
+        st.goalLabel = true;
+        st.valueLine = true;
+        st.labels = Stats.dayLabels(last14.length, 2);
         st.surface = PANEL;
         st.textColor = MUTED;
-        st.tagBg = PILL;
-        st.tagText = 0xFFC7CCD8;
-        Charts.stock(c, 80, 871, 920, 230, last14, goalSec, st);
+        st.textStrong = TEXT;
+        Charts.stock(c, 80, 862, 920, 240, last14, goalSec, st);
 
         // legend
         String[] ln = {"Goal met", "Half or more", "Under half"};
@@ -5392,7 +5396,6 @@ final class ReportCard {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/RingView.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -5457,7 +5460,6 @@ final class RingView extends View {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/Stats.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -5624,6 +5626,16 @@ final class Stats {
         return a;
     }
 
+    /** Short weekday names for the last n days, oldest first. Only every step-th day (counting back from today) gets one. */
+    static String[] dayLabels(int n, int step) {
+        String[] a = new String[n];
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault());
+        for (int i = 0; i < n; i++) {
+            if ((n - 1 - i) % step == 0) a[i] = f.format(cal(i - (n - 1)).getTime());
+        }
+        return a;
+    }
+
     /** Compact duration, like 2h 30m, 42m or 3h. */
     static String durShort(int sec) {
         int m = Math.round(sec / 60f);
@@ -5644,7 +5656,6 @@ final class Stats {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/QuickStartActivity.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -5716,7 +5727,6 @@ public class QuickStartActivity extends Activity {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/Charts.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -5734,10 +5744,10 @@ import android.graphics.Typeface;
  * Colours: green = goal met, amber = half of the goal or more, red = under half.
  */
 final class Charts {
-    static final int GREEN = 0xFF6FD3A0;
-    static final int AMBER = 0xFFD8A67C;
-    static final int RED = 0xFFE5707E;
-    static final int BLUE = 0xFFA9C5FF;
+    static final int GREEN = 0xFF3DDC97;
+    static final int AMBER = 0xFFFFB547;
+    static final int RED = 0xFFFF6B73;
+    static final int BLUE = 0xFF9FB4E8;
     static final int MUTED = 0xFF8C93A3;
 
     private Charts() {
@@ -5768,109 +5778,122 @@ final class Charts {
         float fs = 12f;
         float dot = 4f;
         float line = 3f;
-        boolean tags = false;
-        boolean grid = false;
-        float zoom = 0f;
+        /** Value labels on the left with faint dashed grid lines. */
+        boolean axis = false;
+        /** Bubble with the latest value above the last dot. */
+        boolean tag = false;
+        /** Small "goal 6h" text on the goal line. */
+        boolean goalLabel = false;
+        /** Colour the line by value: red low, amber around half the goal, green at the goal. */
+        boolean valueLine = true;
+        /** Labels under the graph, one per point (null entries are skipped). */
+        String[] labels = null;
         int lineColor = BLUE;
         int surface = 0xFF171C25;
         int textColor = MUTED;
-        int tagBg = 0xFF2A3140;
-        int tagText = 0xFFC7CCD8;
+        int textStrong = 0xFFE6E9F0;
     }
 
     private static void smooth(Path p, float[] x, float[] y) {
+        // monotone cubic: the line never dips below a flat stretch or overshoots a peak
         int n = x.length;
+        float[] d = new float[n - 1];
+        float[] m = new float[n];
+        for (int i = 0; i < n - 1; i++) d[i] = (y[i + 1] - y[i]) / (x[i + 1] - x[i]);
+        m[0] = d[0];
+        m[n - 1] = d[n - 2];
+        for (int i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0f ? 0f : (d[i - 1] + d[i]) / 2f;
+        for (int i = 0; i < n - 1; i++) {
+            if (d[i] == 0f) {
+                m[i] = 0f;
+                m[i + 1] = 0f;
+            } else {
+                float a = m[i] / d[i];
+                float b = m[i + 1] / d[i];
+                float s = a * a + b * b;
+                if (s > 9f) {
+                    float t = 3f / (float) Math.sqrt(s);
+                    m[i] = t * a * d[i];
+                    m[i + 1] = t * b * d[i];
+                }
+            }
+        }
         p.moveTo(x[0], y[0]);
         for (int i = 0; i < n - 1; i++) {
-            float x0 = i > 0 ? x[i - 1] : x[i];
-            float y0 = i > 0 ? y[i - 1] : y[i];
-            float x1 = x[i];
-            float y1 = y[i];
-            float x2 = x[i + 1];
-            float y2 = y[i + 1];
-            float x3 = i + 2 < n ? x[i + 2] : x2;
-            float y3 = i + 2 < n ? y[i + 2] : y2;
-            p.cubicTo(x1 + (x2 - x0) / 6f, y1 + (y2 - y0) / 6f, x2 - (x3 - x1) / 6f, y2 - (y3 - y1) / 6f, x2, y2);
+            float h = x[i + 1] - x[i];
+            p.cubicTo(x[i] + h / 3f, y[i] + m[i] * h / 3f, x[i + 1] - h / 3f, y[i + 1] - m[i + 1] * h / 3f,
+                    x[i + 1], y[i + 1]);
         }
     }
 
-    private static void pill(Canvas c, Paint p, float cx, float cy, float w, float h, int bg, String text,
-                             int textColor, float textSize) {
-        p.setStyle(Paint.Style.FILL);
-        p.setShader(null);
-        p.setColor(bg);
-        c.drawRoundRect(new RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f), h / 2f, h / 2f, p);
-        p.setColor(textColor);
-        p.setTextSize(textSize);
-        p.setTextAlign(Paint.Align.CENTER);
-        c.drawText(text, cx, cy + textSize * 0.35f, p);
+    /** A tick step (in seconds) that gives about four readable grid lines. */
+    private static int tickStep(float maxSec) {
+        int[] mins = {10, 15, 20, 30, 60, 90, 120, 180, 240, 360, 480, 720, 1440};
+        for (int m : mins) {
+            if (maxSec / (m * 60f) <= 4.2f) return m * 60;
+        }
+        return 1440 * 60;
     }
 
-    /** A stock-chart style line graph: smooth line, shaded area, dashed goal level, a dot per day. */
+    /**
+     * A stock-chart style line graph: smooth line coloured by value, shaded area, dashed goal level,
+     * a dot per day, optional value labels, a latest-value bubble and day labels.
+     */
     static void stock(Canvas c, float left, float top, float w, float h, int[] secs, int goalSec, Style s) {
         int n = secs.length;
         if (n < 2 || w <= 0f || h <= 0f) return;
-        float padL = s.tags ? s.fs * 1.15f : s.fs * 0.5f;
-        float padR = s.tags ? s.fs * 7.6f : s.fs * 3.4f;
-        float pad = Math.max(s.dot * 2.6f, s.fs * 0.55f);
-        float x0 = left + padL;
-        float gw = w - padL - padR;
-        float yTop = top + pad;
-        float yBase = top + h - pad;
-        if (gw <= 4f || yBase <= yTop + 4f) return;
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
 
         float maxV = Math.max(goalSec, 1);
-        float minV = Math.max(goalSec, 1);
-        for (int v : secs) {
-            if (v > maxV) maxV = v;
-            if (v < minV) minV = v;
+        for (int v : secs) if (v > maxV) maxV = v;
+        float hi = maxV * 1.12f;
+        int step = tickStep(hi);
+
+        float padL = s.fs * 0.6f;
+        if (s.axis) {
+            p.setTextSize(s.fs);
+            float widest = p.measureText("0m");
+            for (int t = step; t <= hi; t += step) widest = Math.max(widest, p.measureText(Stats.durShort(t)));
+            padL = widest + s.fs * 1.1f;
         }
-        float hi = maxV * 1.15f;
-        float lo = s.zoom > 0f ? minV * s.zoom : 0f;
-        if (hi <= lo + 1f) hi = lo + 1f;
-        float span = hi - lo;
+        float padR = s.tag ? s.fs * 2.4f : s.fs * 1.0f;
+        float padT = Math.max(s.dot * 2.6f, s.fs * 0.6f);
+        float padB = padT + (s.labels != null ? s.fs * 1.9f : 0f);
+        float x0 = left + padL;
+        float gw = w - padL - padR;
+        float yTop = top + padT;
+        float yBase = top + h - padB;
+        if (gw <= 4f || yBase <= yTop + 4f) return;
+        float span = hi;
 
         float[] xs = new float[n];
         float[] ys = new float[n];
         for (int i = 0; i < n; i++) {
             xs[i] = x0 + i * (gw / (n - 1));
-            ys[i] = yBase - ((secs[i] - lo) / span) * (yBase - yTop);
+            ys[i] = yBase - (secs[i] / span) * (yBase - yTop);
         }
-        float gy = yBase - ((goalSec - lo) / span) * (yBase - yTop);
-        float ly = ys[n - 1];
-        float th = s.fs * 1.7f;
-        float gty = gy;
-        float lty = ly;
-        if (s.tags && Math.abs(gty - lty) < th + 2f) {
-            if (gty <= lty) {
-                gty = lty - th - 3f;
-            } else {
-                gty = lty + th + 3f;
-            }
-        }
+        float yGoal = yBase - (goalSec / span) * (yBase - yTop);
 
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-
-        // grid and axis labels
-        if (s.grid) {
-            float[] levels = {0.33f, 0.66f, 1f};
-            for (float f : levels) {
-                float gv = maxV * f;
-                float yy = yBase - ((gv - lo) / span) * (yBase - yTop);
-                if (Math.abs(yy - gy) < s.fs * 1.4f) continue;
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(Math.max(1f, s.fs / 12f));
-                p.setColor(0x14FFFFFF);
-                c.drawLine(x0, yy, x0 + gw, yy, p);
-                boolean hide = s.tags && (Math.abs(yy - gty) < th * 0.9f || Math.abs(yy - lty) < th * 0.9f);
-                if (s.tags && !hide) {
-                    p.setStyle(Paint.Style.FILL);
-                    p.setColor(alpha(s.textColor, 0xB0));
-                    p.setTextSize(s.fs);
-                    p.setTextAlign(Paint.Align.LEFT);
-                    c.drawText(Stats.durShort((int) gv), x0 + gw + s.fs * 0.7f, yy + s.fs * 0.35f, p);
+        // grid and value labels
+        if (s.axis) {
+            for (int t = 0; t <= hi; t += step) {
+                float yy = yBase - (t / span) * (yBase - yTop);
+                if (t > 0 && Math.abs(yy - yGoal) < s.fs * 0.6f) {
+                    // the goal line already marks this level
+                } else if (t > 0) {
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(Math.max(1f, s.fs / 12f));
+                    p.setColor(0x16FFFFFF);
+                    p.setPathEffect(new DashPathEffect(new float[]{s.fs * 0.35f, s.fs * 0.35f}, 0f));
+                    c.drawLine(x0, yy, x0 + gw, yy, p);
+                    p.setPathEffect(null);
                 }
+                p.setStyle(Paint.Style.FILL);
+                p.setColor(alpha(s.textColor, 0xC8));
+                p.setTextSize(s.fs);
+                p.setTextAlign(Paint.Align.LEFT);
+                c.drawText(t == 0 ? "0m" : Stats.durShort(t), left + s.fs * 0.3f, yy + s.fs * 0.35f, p);
             }
         }
 
@@ -5880,63 +5903,97 @@ final class Charts {
         area.lineTo(xs[n - 1], yBase);
         area.lineTo(xs[0], yBase);
         area.close();
+
+        boolean vl = s.valueLine && goalSec > 0;
+        Shader fillShader;
+        Shader lineShader = null;
+        if (vl) {
+            fillShader = new LinearGradient(0f, yGoal, 0f, yBase,
+                    new int[]{alpha(GREEN, 0x66), alpha(AMBER, 0x40), alpha(RED, 0x12)},
+                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP);
+            lineShader = new LinearGradient(0f, yGoal, 0f, yBase, new int[]{GREEN, AMBER, RED},
+                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP);
+        } else {
+            fillShader = new LinearGradient(0f, yTop, 0f, yBase, alpha(s.lineColor, 0x60), alpha(s.lineColor, 0x00),
+                    Shader.TileMode.CLAMP);
+        }
         p.setStyle(Paint.Style.FILL);
-        p.setShader(new LinearGradient(0f, yTop, 0f, yBase, alpha(s.lineColor, 0x61), alpha(s.lineColor, 0x00),
-                Shader.TileMode.CLAMP));
+        p.setShader(fillShader);
         c.drawPath(area, p);
         p.setShader(null);
 
         // goal level
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(Math.max(1f, s.fs / 9f));
-        p.setColor(alpha(MUTED, 0xE6));
-        p.setPathEffect(new DashPathEffect(new float[]{s.fs * 0.6f, s.fs * 0.45f}, 0f));
-        c.drawLine(x0, gy, x0 + gw, gy, p);
+        p.setColor(0xB0C7CCD8);
+        p.setPathEffect(new DashPathEffect(new float[]{s.fs * 0.7f, s.fs * 0.5f}, 0f));
+        c.drawLine(x0, yGoal, x0 + gw, yGoal, p);
         p.setPathEffect(null);
+        if (s.goalLabel) {
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(0xCCC7CCD8);
+            p.setTextSize(s.fs * 0.95f);
+            p.setTextAlign(Paint.Align.LEFT);
+            c.drawText("goal " + Stats.durShort(goalSec), x0 + s.fs * 0.4f, yGoal - s.fs * 0.45f, p);
+        }
 
         // the line
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(s.line);
         p.setStrokeCap(Paint.Cap.ROUND);
         p.setStrokeJoin(Paint.Join.ROUND);
-        p.setColor(s.lineColor);
+        if (vl) {
+            p.setShader(lineShader);
+        } else {
+            p.setColor(s.lineColor);
+        }
         c.drawPath(line, p);
+        p.setShader(null);
 
-        // dots
+        // dots, and the last one with a glow
+        int lastCol = status(secs[n - 1], goalSec);
         p.setStyle(Paint.Style.FILL);
-        p.setColor(alpha(status(secs[n - 1], goalSec), 0x38));
-        c.drawCircle(xs[n - 1], ys[n - 1], s.dot * 2.6f, p);
-        for (int i = 0; i < n; i++) {
-            boolean last = i == n - 1;
-            p.setStyle(Paint.Style.FILL);
+        for (int i = 0; i < n - 1; i++) {
             p.setColor(status(secs[i], goalSec));
-            c.drawCircle(xs[i], ys[i], last ? s.dot * 1.5f : s.dot, p);
-            if (last) {
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(s.dot * 0.6f);
-                p.setColor(s.surface);
-                c.drawCircle(xs[i], ys[i], s.dot * 1.5f, p);
-            }
+            c.drawCircle(xs[i], ys[i], s.dot, p);
+        }
+        p.setColor(alpha(lastCol, 0x48));
+        c.drawCircle(xs[n - 1], ys[n - 1], s.dot * 3.0f, p);
+        p.setColor(lastCol);
+        c.drawCircle(xs[n - 1], ys[n - 1], s.dot * 1.9f, p);
+        p.setColor(0xFFFFFFFF);
+        c.drawCircle(xs[n - 1], ys[n - 1], s.dot * 1.05f, p);
+
+        // bubble with the latest value
+        if (s.tag) {
+            String t = Stats.durShort(secs[n - 1]);
+            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            p.setTextSize(s.fs * 1.05f);
+            float bw = p.measureText(t) + s.fs * 1.3f;
+            float bh = s.fs * 2.0f;
+            float by = ys[n - 1] - s.dot * 3.2f - bh;
+            if (by < top) by = ys[n - 1] + s.dot * 3.2f;
+            float bx = Math.min(xs[n - 1] + bw / 2f, left + w);
+            RectF r = new RectF(bx - bw, by, bx, by + bh);
+            p.setColor(lastCol);
+            c.drawRoundRect(r, bh * 0.38f, bh * 0.38f, p);
+            p.setColor(0xFF101319);
+            p.setTextAlign(Paint.Align.CENTER);
+            c.drawText(t, r.centerX(), r.centerY() + s.fs * 0.38f, p);
+            p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         }
 
-        // right edge: goal tag and latest-value tag
-        if (s.tags) {
-            float tx = x0 + gw + s.fs * 0.6f;
-            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            String gt = "Goal " + Stats.durShort(goalSec);
-            p.setTextSize(s.fs * 0.9f);
-            float gtw = Math.max(s.fs * 5.2f, p.measureText(gt) + s.fs * 1.2f);
-            pill(c, p, tx + gtw / 2f, gty, gtw, th, s.tagBg, gt, s.tagText, s.fs * 0.9f);
-            String lt = Stats.durShort(secs[n - 1]);
-            p.setTextSize(s.fs * 0.95f);
-            float ltw = Math.max(s.fs * 5.2f, p.measureText(lt) + s.fs * 1.2f);
-            pill(c, p, tx + ltw / 2f, lty, ltw, th, status(secs[n - 1], goalSec), lt, 0xFF101319, s.fs * 0.95f);
-        } else {
+        // day labels
+        if (s.labels != null) {
             p.setStyle(Paint.Style.FILL);
-            p.setColor(s.textColor);
             p.setTextSize(s.fs);
-            p.setTextAlign(Paint.Align.LEFT);
-            c.drawText("goal", x0 + gw + s.dot * 3f + 3f, gy + s.fs * 0.35f, p);
+            p.setTextAlign(Paint.Align.CENTER);
+            float ly = yBase + s.fs * 1.9f - s.fs * 0.1f;
+            for (int i = 0; i < n && i < s.labels.length; i++) {
+                if (s.labels[i] == null) continue;
+                p.setColor(i == n - 1 ? s.textStrong : alpha(s.textColor, 0xE0));
+                c.drawText(s.labels[i], xs[i], ly, p);
+            }
         }
     }
 
@@ -5947,6 +6004,13 @@ final class Charts {
         p.setStrokeWidth(stroke);
         p.setStrokeCap(Paint.Cap.ROUND);
         RectF rf = new RectF(cx - r, cy - r, cx + r, cy + r);
+        if (frac > 0.003f) {
+            // soft glow in the same colour
+            p.setColor(alpha(color, 0x30));
+            p.setStrokeWidth(stroke * 1.5f);
+            c.drawArc(rf, -90f, 360f * Math.min(1f, frac), false, p);
+            p.setStrokeWidth(stroke);
+        }
         p.setColor(track);
         c.drawOval(rf, p);
         if (frac > 0.003f) {
@@ -5956,7 +6020,6 @@ final class Charts {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/QuickTileService.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -6033,7 +6096,6 @@ public class QuickTileService extends TileService {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/StockView.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -6041,15 +6103,13 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.view.View;
 
-/** The stock-style graph of recent days, with a dashed goal level and a tag with the latest value. */
+/** The stock-style graph of recent days: line coloured by value, goal line, value labels and day names. */
 final class StockView extends View {
     int[] secs = new int[14];
     int goalSec = 3600;
-    int lineColor = Charts.BLUE;
     int surface = 0xFF171C25;
     int textColor = Charts.MUTED;
-    int tagBg = 0xFF2A3140;
-    int tagText = 0xFFC7CCD8;
+    int textStrong = 0xFFE6E9F0;
 
     StockView(Context c) {
         super(c);
@@ -6060,20 +6120,20 @@ final class StockView extends View {
         float d = getResources().getDisplayMetrics().density;
         Charts.Style st = new Charts.Style();
         st.fs = 11f * d;
-        st.dot = 3.4f * d;
-        st.line = 2.6f * d;
-        st.tags = true;
-        st.grid = true;
-        st.lineColor = lineColor;
+        st.dot = 3.2f * d;
+        st.line = 2.8f * d;
+        st.axis = true;
+        st.tag = true;
+        st.goalLabel = true;
+        st.valueLine = true;
+        st.labels = Stats.dayLabels(secs.length, 2);
         st.surface = surface;
         st.textColor = textColor;
-        st.tagBg = tagBg;
-        st.tagText = tagText;
+        st.textStrong = textStrong;
         Charts.stock(c, 0f, 0f, getWidth(), getHeight(), secs, goalSec, st);
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/WatchuWidget.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -6136,7 +6196,8 @@ public class WatchuWidget extends AppWidgetProvider {
             int today = Stats.secs(m, Stats.cal(0));
             int thisWeek = Stats.sumDays(m, -6, 0);
             int lastWeek = Stats.sumDays(m, -13, -7);
-            int[] last14 = Stats.lastDays(m, 14);
+            int[] last7 = Stats.lastDays(m, 7);
+            int streak = Stats.streak(m, goal);
             int exam = Stats.examDays(p);
             List<Presets.Preset> presets = QuickStartActivity.visiblePresets(p);
             boolean buttons = !presets.isEmpty();
@@ -6147,13 +6208,13 @@ public class WatchuWidget extends AppWidgetProvider {
             int wDp = o.getInt(land ? AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH
                     : AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250);
             int hDp = o.getInt(land ? AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT
-                    : AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 130);
+                    : AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 160);
             if (wDp <= 0) wDp = 250;
-            if (hDp <= 0) hDp = 130;
+            if (hDp <= 0) hDp = 160;
             int artW = Math.max(120, Math.min(1400, Math.round((wDp - 16) * d)));
             int artH = Math.max(60, Math.min(800, Math.round((hDp - 16 - (buttons ? 38 : 0)) * d)));
 
-            Bitmap bmp = draw(artW, artH, d, goal, today, thisWeek, lastWeek, last14, exam);
+            Bitmap bmp = WidgetArt.draw(artW, artH, d, goal, today, thisWeek, lastWeek, last7, streak, exam);
 
             RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget);
             rv.setImageViewBitmap(R.id.w_art, bmp);
@@ -6183,130 +6244,8 @@ public class WatchuWidget extends AppWidgetProvider {
         } catch (Exception ignored) {
         }
     }
-
-    private static float fit(Paint p, String s, float size, float maxW) {
-        p.setTextSize(size);
-        float w = p.measureText(s);
-        return w > maxW && w > 0f ? size * maxW / w : size;
-    }
-
-    private static Bitmap draw(int w, int h, float d, int goal, int today, int thisWeek, int lastWeek,
-                               int[] last14, int exam) {
-        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        int pct = Stats.weekPct(thisWeek, lastWeek);
-        int tcol = Charts.trend(pct);
-
-        // today ring on the left
-        float leftW = Math.min(h, w * 0.30f);
-        float stroke = leftW * 0.10f;
-        float r = leftW / 2f - stroke * 0.75f;
-        float cx = leftW / 2f;
-        float cy = h / 2f;
-        float frac = goal > 0 ? Math.min(1f, today / (float) goal) : 0f;
-        Charts.ring(c, cx, cy, r, stroke, frac, Charts.status(today, goal), 0x33FFFFFF);
-        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        p.setTextAlign(Paint.Align.CENTER);
-        p.setStyle(Paint.Style.FILL);
-        String big = Stats.dur(today);
-        float bs = fit(p, big, r * 0.55f, r * 1.45f);
-        p.setTextSize(bs);
-        p.setColor(TEXT);
-        boolean small = r >= 26f * d;
-        c.drawText(big, cx, small ? cy : cy + bs * 0.35f, p);
-        if (small) {
-            p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-            String of = "of " + Stats.dur(goal);
-            float ss = fit(p, of, r * 0.30f, r * 1.4f);
-            p.setTextSize(ss);
-            p.setColor(MUTED);
-            c.drawText(of, cx, cy + bs * 0.35f + ss * 1.25f, p);
-        }
-
-        // right side: weekly change and exam on top, graph below
-        float x0 = leftW + 10f * d;
-        float rw = w - x0 - 2f * d;
-        boolean graph = h >= 56f * d && rw >= 110f * d;
-        float topH = graph ? h * 0.36f : h;
-        float topCy = graph ? topH / 2f : h / 2f;
-
-        float exW = 0f;
-        if (exam >= 0) {
-            int ecol = Charts.status(thisWeek / 7, goal);
-            String et = exam == 0 ? "EXAM DAY" : "EXAM " + exam + "d";
-            float bh = Math.min(topH * 0.86f, 26f * d);
-            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            float es = bh * 0.46f;
-            p.setTextSize(es);
-            float tw = p.measureText(et);
-            exW = tw + bh * 0.9f;
-            float ex1 = x0 + rw;
-            p.setStyle(Paint.Style.FILL);
-            p.setColor(Charts.alpha(ecol, 0x33));
-            c.drawRoundRect(new RectF(ex1 - exW, topCy - bh / 2f, ex1, topCy + bh / 2f), bh / 2f, bh / 2f, p);
-            p.setColor(ecol);
-            p.setTextAlign(Paint.Align.CENTER);
-            c.drawText(et, ex1 - exW / 2f, topCy + es * 0.35f, p);
-        }
-
-        float avail = rw - (exW > 0f ? exW + 8f * d : 0f);
-        float px = x0;
-        float ps = Math.min(topH * 0.62f, 30f * d);
-        if (pct != Stats.NO_PCT && pct != 0) {
-            float tsz = ps * 0.62f;
-            Path tri = new Path();
-            if (pct > 0) {
-                tri.moveTo(px, topCy + tsz / 2f);
-                tri.lineTo(px + tsz, topCy + tsz / 2f);
-                tri.lineTo(px + tsz / 2f, topCy - tsz / 2f);
-            } else {
-                tri.moveTo(px, topCy - tsz / 2f);
-                tri.lineTo(px + tsz, topCy - tsz / 2f);
-                tri.lineTo(px + tsz / 2f, topCy + tsz / 2f);
-            }
-            tri.close();
-            p.setStyle(Paint.Style.FILL);
-            p.setColor(tcol);
-            c.drawPath(tri, p);
-            px += tsz + 5f * d;
-            avail -= tsz + 5f * d;
-        }
-        String pt = Stats.pctText(pct);
-        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        float pfs = fit(p, pt, ps, Math.max(20f * d, avail * 0.62f));
-        p.setTextSize(pfs);
-        p.setColor(tcol);
-        p.setTextAlign(Paint.Align.LEFT);
-        c.drawText(pt, px, topCy + pfs * 0.35f, p);
-        float pw = p.measureText(pt);
-        String vs = "vs last week";
-        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        float vsz = Math.min(pfs * 0.42f, 11f * d);
-        p.setTextSize(vsz);
-        if (vsz >= 7f * d && p.measureText(vs) < avail - pw - 6f * d) {
-            p.setColor(MUTED);
-            c.drawText(vs, px + pw + 6f * d, topCy + vsz * 0.35f, p);
-        }
-
-        if (graph) {
-            Charts.Style st = new Charts.Style();
-            st.fs = Math.max(8f * d, h * 0.10f);
-            st.dot = Math.max(1.6f * d, h * 0.022f);
-            st.line = Math.max(1.6f * d, h * 0.03f);
-            st.tags = false;
-            st.grid = false;
-            st.lineColor = tcol;
-            st.surface = SURFACE;
-            st.textColor = MUTED;
-            float gt = topH + 2f * d;
-            Charts.stock(c, x0, gt, rw, h - gt, last14, goal, st);
-        }
-        return bmp;
-    }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/java/com/floaty/timer'
 cat > 'app/src/main/java/com/floaty/timer/WhatsNew.java' <<'FLOATY_EOF'
 package com.floaty.timer;
 
@@ -6317,15 +6256,22 @@ import android.content.SharedPreferences;
 /** The one-time "What's new" dialog after an update, and the "More tips" page. */
 final class WhatsNew {
     /** Raise this by one with every update that has news to show. */
-    static final int VERSION = 13;
+    static final int VERSION = 14;
 
     private WhatsNew() {
     }
 
     /** News per update, newest first. VERSIONS[i] goes with NEWS[i]. */
-    private static final int[] VERSIONS = {13, 12};
+    private static final int[] VERSIONS = {14, 13, 12};
 
     private static final String[] NEWS = {
+            "\u2022 New widget: ring, exam countdown, this week, change vs last week and a graph. Resize it "
+                    + "for a bigger or smaller view.\n\n"
+                    + "\u2022 Brighter colours and weekday names on the graph, the Stats tab and the report card.\n\n"
+                    + "\u2022 The tile and widget buttons no longer pull the app to the front.\n\n"
+                    + "\u2022 Pomodoro breaks are now limited: short up to a quarter of focus, long up to the "
+                    + "focus time (max 30 min). Turn it off in Settings.\n\n"
+                    + "\u2022 Settings: Download link and Share app link.",
             "\u2022 Desk mode: tap the clock to pause or resume, hold it to restart. Tap the empty space "
                     + "for the buttons.\n\n"
                     + "\u2022 Desk mode now shows today's progress and the exam countdown under the clock.\n\n"
@@ -6340,6 +6286,8 @@ final class WhatsNew {
                     + "\u2022 A shorter tutorial, and a More tips page in Settings."};
 
     private static final String TIPS = ""
+            + "\u2022 Pomodoro breaks are capped (a quarter of focus for short ones). For longer rests use "
+            + "Timer, or turn the limit off in Settings.\n\n"
             + "\u2022 Pomodoro: hold the bubble once to restart the step you are in. Hold again within "
             + "5 seconds to reset everything.\n\n"
             + "\u2022 When a Pomodoro break starts, tap the bubble within 10 seconds to skip it.\n\n"
@@ -6397,7 +6345,6 @@ final class WhatsNew {
     }
 }
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/ic_tile.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -6414,7 +6361,6 @@ cat > 'app/src/main/res/drawable/ic_tile.xml' <<'FLOATY_EOF'
         android:strokeWidth="2" />
 </vector>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/widget_bg.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -6423,7 +6369,6 @@ cat > 'app/src/main/res/drawable/widget_bg.xml' <<'FLOATY_EOF'
     <corners android:radius="20dp" />
 </shape>
 FLOATY_EOF
-mkdir -p 'app/src/main/res/drawable'
 cat > 'app/src/main/res/drawable/widget_btn.xml' <<'FLOATY_EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -6513,7 +6458,7 @@ cat > 'app/src/main/res/xml/widget_info.xml' <<'FLOATY_EOF'
     android:description="@string/widget_desc"
     android:initialLayout="@layout/widget"
     android:minWidth="250dp"
-    android:minHeight="130dp"
+    android:minHeight="160dp"
     android:minResizeWidth="180dp"
     android:minResizeHeight="110dp"
     android:resizeMode="horizontal|vertical"
@@ -6521,6 +6466,257 @@ cat > 'app/src/main/res/xml/widget_info.xml' <<'FLOATY_EOF'
     android:targetCellHeight="2"
     android:updatePeriodMillis="1800000"
     android:widgetCategory="home_screen" />
+FLOATY_EOF
+cat > 'app/src/main/java/com/floaty/timer/WidgetArt.java' <<'FLOATY_EOF'
+package com.floaty.timer;
+
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+
+/** Draws the picture at the top of the home-screen widget. */
+final class WidgetArt {
+    private static final int SURFACE = 0xFF171C25;
+    private static final int TEXT = 0xFFE6E9F0;
+    private static final int MUTED = 0xFF8C93A3;
+
+    private WidgetArt() {
+    }
+
+    private static float fit(Paint p, String s, float size, float maxW) {
+        p.setTextSize(size);
+        float w = p.measureText(s);
+        return w > maxW && w > 0f ? size * maxW / w : size;
+    }
+
+    private static void chip(Canvas c, Paint p, float l, float t, float w, float h, String value, int valueColor,
+                             String label, float d) {
+        p.setStyle(Paint.Style.FILL);
+        p.setShader(null);
+        p.setColor(0xFF202735);
+        c.drawRoundRect(new RectF(l, t, l + w, t + h), h * 0.3f, h * 0.3f, p);
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        float vs = fit(p, value, h * 0.40f, w * 0.9f);
+        p.setTextSize(vs);
+        p.setColor(valueColor);
+        c.drawText(value, l + w / 2f, t + h * 0.55f, p);
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        float ls = fit(p, label, Math.max(8f * d, h * 0.22f), w * 0.9f);
+        p.setTextSize(ls);
+        p.setColor(MUTED);
+        c.drawText(label, l + w / 2f, t + h * 0.87f, p);
+    }
+
+    static Bitmap draw(int w, int h, float d, int goal, int today, int thisWeek, int lastWeek,
+                               int[] last7, int streak, int exam) {
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        if (h >= 96f * d && w >= 230f * d) {
+            drawFull(c, w, h, d, goal, today, thisWeek, lastWeek, last7, streak, exam);
+        } else {
+            drawCompact(c, w, h, d, goal, today, thisWeek, lastWeek, last7, exam);
+        }
+        return bmp;
+    }
+
+    /** Ring with today's share, three chips and the week graph with day names. */
+    private static void drawFull(Canvas c, int w, int h, float d, int goal, int today, int thisWeek,
+                                 int lastWeek, int[] last7, int streak, int exam) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        int pct = Stats.weekPct(thisWeek, lastWeek);
+        int tcol = Charts.trend(pct);
+        int scol = Charts.status(today, goal);
+
+        float leftW = Math.min(h * 0.80f, w * 0.27f);
+        float chipH = h * 0.20f;
+        float ringArea = h - chipH - 4f * d;
+        float ringD = Math.min(leftW, ringArea);
+        float stroke = ringD * 0.11f;
+        float r = ringD / 2f - stroke * 0.9f;
+        float cx = leftW / 2f;
+        float cy = ringArea / 2f;
+        float frac = goal > 0 ? Math.min(1f, today / (float) goal) : 0f;
+        Charts.ring(c, cx, cy, r, stroke, frac, scol, 0xFF262D3A);
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setStyle(Paint.Style.FILL);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        String big = Stats.dur(today);
+        float bs = fit(p, big, r * 0.62f, r * 1.5f);
+        p.setTextSize(bs);
+        p.setColor(0xFFFFFFFF);
+        c.drawText(big, cx, cy + bs * 0.12f, p);
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        String of = "of " + Stats.dur(goal);
+        float os = fit(p, of, r * 0.34f, r * 1.4f);
+        p.setTextSize(os);
+        p.setColor(MUTED);
+        c.drawText(of, cx, cy + bs * 0.12f + os * 1.4f, p);
+
+        // share of the goal, under the ring
+        int share = goal > 0 ? Math.round(today * 100f / goal) : 0;
+        float cw = leftW * 0.78f;
+        float ct = h - chipH;
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFF202735);
+        c.drawRoundRect(new RectF(cx - cw / 2f, ct, cx + cw / 2f, h), chipH / 2f, chipH / 2f, p);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        float ss = fit(p, share + "%", chipH * 0.55f, cw * 0.8f);
+        p.setTextSize(ss);
+        p.setColor(scol);
+        c.drawText(share + "%", cx, ct + chipH / 2f + ss * 0.35f, p);
+
+        // chips
+        float x0 = leftW + 10f * d;
+        float rw = w - x0 - 2f * d;
+        float chipsH = h * 0.31f;
+        float gap = 6f * d;
+        float each = (rw - 2f * gap) / 3f;
+        int ecol = Charts.status(thisWeek / 7, goal);
+        if (exam >= 0) {
+            chip(c, p, x0, 0f, each, chipsH, exam == 0 ? "Today" : exam + "d", ecol, "Exam", d);
+        } else {
+            chip(c, p, x0, 0f, each, chipsH, streak + (streak == 1 ? " day" : " days"), TEXT, "Streak", d);
+        }
+        chip(c, p, x0 + each + gap, 0f, each, chipsH, Stats.dur(thisWeek), TEXT, "This week", d);
+        chip(c, p, x0 + 2f * (each + gap), 0f, each, chipsH, Stats.pctText(pct), tcol, "vs last week", d);
+
+        // graph panel
+        float gt = chipsH + 6f * d;
+        float gh = h - gt;
+        p.setStyle(Paint.Style.FILL);
+        p.setShader(null);
+        p.setColor(0xFF10141B);
+        c.drawRoundRect(new RectF(x0, gt, x0 + rw, h), 14f * d, 14f * d, p);
+        Charts.Style st = new Charts.Style();
+        st.fs = Math.max(8f * d, Math.min(11f * d, gh * 0.11f));
+        st.dot = Math.max(1.8f * d, gh * 0.03f);
+        st.line = Math.max(1.8f * d, gh * 0.04f);
+        st.axis = true;
+        st.tag = true;
+        st.goalLabel = gh > 60f * d;
+        st.valueLine = true;
+        st.labels = Stats.dayLabels(last7.length, 1);
+        st.surface = 0xFF10141B;
+        st.textColor = MUTED;
+        st.textStrong = TEXT;
+        Charts.stock(c, x0 + 4f * d, gt, rw - 8f * d, gh, last7, goal, st);
+    }
+
+    /** Small widgets: ring, weekly change, exam box and a small graph. */
+    private static void drawCompact(Canvas c, int w, int h, float d, int goal, int today, int thisWeek,
+                                    int lastWeek, int[] last7, int exam) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        int pct = Stats.weekPct(thisWeek, lastWeek);
+        int tcol = Charts.trend(pct);
+
+        // today ring on the left
+        float leftW = Math.min(h, w * 0.30f);
+        float stroke = leftW * 0.10f;
+        float r = leftW / 2f - stroke * 0.9f;
+        float cx = leftW / 2f;
+        float cy = h / 2f;
+        float frac = goal > 0 ? Math.min(1f, today / (float) goal) : 0f;
+        Charts.ring(c, cx, cy, r, stroke, frac, Charts.status(today, goal), 0xFF262D3A);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setStyle(Paint.Style.FILL);
+        String big = Stats.dur(today);
+        float bs = fit(p, big, r * 0.55f, r * 1.45f);
+        p.setTextSize(bs);
+        p.setColor(TEXT);
+        boolean small = r >= 26f * d;
+        c.drawText(big, cx, small ? cy : cy + bs * 0.35f, p);
+        if (small) {
+            p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            String of = "of " + Stats.dur(goal);
+            float ss = fit(p, of, r * 0.30f, r * 1.4f);
+            p.setTextSize(ss);
+            p.setColor(MUTED);
+            c.drawText(of, cx, cy + bs * 0.35f + ss * 1.25f, p);
+        }
+
+        // right side: weekly change and exam on top, graph below
+        float x0 = leftW + 10f * d;
+        float rw = w - x0 - 2f * d;
+        boolean graph = h >= 56f * d && rw >= 110f * d;
+        float topH = graph ? h * 0.36f : h;
+        float topCy = graph ? topH / 2f : h / 2f;
+
+        float exW = 0f;
+        if (exam >= 0) {
+            int ecol = Charts.status(thisWeek / 7, goal);
+            String et = exam == 0 ? "EXAM DAY" : "EXAM " + exam + "d";
+            float bh = Math.min(topH * 0.86f, 26f * d);
+            p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            float es = bh * 0.46f;
+            p.setTextSize(es);
+            float tw = p.measureText(et);
+            exW = tw + bh * 0.9f;
+            float ex1 = x0 + rw;
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(Charts.alpha(ecol, 0x33));
+            c.drawRoundRect(new RectF(ex1 - exW, topCy - bh / 2f, ex1, topCy + bh / 2f), bh / 2f, bh / 2f, p);
+            p.setColor(ecol);
+            p.setTextAlign(Paint.Align.CENTER);
+            c.drawText(et, ex1 - exW / 2f, topCy + es * 0.35f, p);
+        }
+
+        float avail = rw - (exW > 0f ? exW + 8f * d : 0f);
+        float px = x0;
+        float ps = Math.min(topH * 0.62f, 30f * d);
+        if (pct != Stats.NO_PCT && pct != 0) {
+            float tsz = ps * 0.62f;
+            Path tri = new Path();
+            if (pct > 0) {
+                tri.moveTo(px, topCy + tsz / 2f);
+                tri.lineTo(px + tsz, topCy + tsz / 2f);
+                tri.lineTo(px + tsz / 2f, topCy - tsz / 2f);
+            } else {
+                tri.moveTo(px, topCy - tsz / 2f);
+                tri.lineTo(px + tsz, topCy - tsz / 2f);
+                tri.lineTo(px + tsz / 2f, topCy + tsz / 2f);
+            }
+            tri.close();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(tcol);
+            c.drawPath(tri, p);
+            px += tsz + 5f * d;
+            avail -= tsz + 5f * d;
+        }
+        String pt = Stats.pctText(pct);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        float pfs = fit(p, pt, ps, Math.max(20f * d, avail * 0.62f));
+        p.setTextSize(pfs);
+        p.setColor(tcol);
+        p.setTextAlign(Paint.Align.LEFT);
+        c.drawText(pt, px, topCy + pfs * 0.35f, p);
+        float pw = p.measureText(pt);
+        String vs = "vs last week";
+        p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        float vsz = Math.min(pfs * 0.42f, 11f * d);
+        p.setTextSize(vsz);
+        if (vsz >= 7f * d && p.measureText(vs) < avail - pw - 6f * d) {
+            p.setColor(MUTED);
+            c.drawText(vs, px + pw + 6f * d, topCy + vsz * 0.35f, p);
+        }
+
+        if (graph) {
+            Charts.Style st = new Charts.Style();
+            st.fs = Math.max(8f * d, h * 0.10f);
+            st.dot = Math.max(1.8f * d, h * 0.024f);
+            st.line = Math.max(1.8f * d, h * 0.032f);
+            st.valueLine = true;
+            st.surface = SURFACE;
+            st.textColor = MUTED;
+            float gt = topH + 2f * d;
+            Charts.stock(c, x0, gt, rw, h - gt, last7, goal, st);
+        }
+    }
+}
 FLOATY_EOF
 cat > 'build.gradle' <<'FLOATY_EOF'
 plugins {
