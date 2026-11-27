@@ -15,7 +15,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('BUILD_NUMBER') ?: '1')
-        versionName '1.15'
+        versionName '1.17'
     }
 
     // Uses your private key when the secrets are set in GitHub; otherwise the default debug key.
@@ -1398,7 +1398,7 @@ public class FloatingService extends Service {
     private void loadConfig() {
         mode = Prefs.getInt(prefs, Prefs.MODE);
         readClockFlags();
-        roundsBeforeLong = Math.max(1, Prefs.getInt(prefs, Prefs.POMO_ROUNDS));
+        roundsBeforeLong = Math.max(Prefs.MIN_ROUNDS, Prefs.getInt(prefs, Prefs.POMO_ROUNDS));
         stopAlarm();
         resetState();
         timerRunning = mode != Prefs.MODE_CLOCK;
@@ -2430,11 +2430,11 @@ public class MainActivity extends Activity {
         } else if (mode == Prefs.MODE_POMODORO) {
             card.addView(stepper("Focus", Prefs.POMO_WORK, 1, 180, 1, "min", N_CONFIG));
             card.addView(divider());
-            card.addView(stepper("Short break", Prefs.POMO_SHORT, 1, Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1 ? Prefs.maxShort(p) : 60, 1, "min", N_CONFIG));
+            card.addView(stepper("Short break", Prefs.POMO_SHORT, 1, 60, 1, "min", N_CONFIG));
             card.addView(divider());
-            card.addView(stepper("Long break", Prefs.POMO_LONG, 1, Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1 ? Prefs.maxLong(p) : 120, 1, "min", N_CONFIG));
+            card.addView(stepper("Long break", Prefs.POMO_LONG, 1, 120, 1, "min", N_CONFIG));
             card.addView(divider());
-            card.addView(stepper("Rounds before long break", Prefs.POMO_ROUNDS, 1, 12, 1, "", N_CONFIG));
+            card.addView(stepper("Rounds before long break", Prefs.POMO_ROUNDS, Prefs.MIN_ROUNDS, 12, 1, "", N_CONFIG));
             if (Prefs.getInt(p, Prefs.LIMIT_BREAKS) == 1) {
                 int ms = Prefs.maxShort(p);
                 int ml = Prefs.maxLong(p);
@@ -2490,6 +2490,7 @@ public class MainActivity extends Activity {
         row.addView(ui.text(label, 16, ui.onSurface), new LinearLayout.LayoutParams(0, WRAP, 1f));
         final TextView value = ui.medium(valueText(Prefs.getInt(p, key), unit), 16, ui.onSurface);
         value.setGravity(Gravity.CENTER);
+        valueViews.put(key, value);
         value.setPaintFlags(value.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         value.setOnClickListener(v -> askNumber(label, key, min, max, value, unit, notify));
         TextView minus = ui.stepButton("−", () -> bump(key, -step, min, max, value, unit, notify));
@@ -2500,13 +2501,33 @@ public class MainActivity extends Activity {
         return row;
     }
 
+    private final java.util.HashMap<String, TextView> valueViews = new java.util.HashMap<>();
+
+    /** Breaks follow the limit live, without rebuilding the screen (that would cut a held button). */
+    private void afterPomo(String key) {
+        if (!key.startsWith("pomo_")) return;
+        Prefs.clampBreaks(p);
+        TextView s = valueViews.get(Prefs.POMO_SHORT);
+        if (s != null) s.setText(valueText(Prefs.getInt(p, Prefs.POMO_SHORT), "min"));
+        TextView l = valueViews.get(Prefs.POMO_LONG);
+        if (l != null) l.setText(valueText(Prefs.getInt(p, Prefs.POMO_LONG), "min"));
+    }
+
+    private int liveMax(String key, int max) {
+        if (Prefs.getInt(p, Prefs.LIMIT_BREAKS) != 1) return max;
+        if (key.equals(Prefs.POMO_SHORT)) return Prefs.maxShort(p);
+        if (key.equals(Prefs.POMO_LONG)) return Prefs.maxLong(p);
+        return max;
+    }
+
     private String valueText(int v, String unit) {
         return unit.isEmpty() ? String.valueOf(v) : v + " " + unit;
     }
 
     /** Lets the user type a number. It is kept inside the allowed range. */
-    private void askNumber(String label, final String key, final int min, final int max,
+    private void askNumber(String label, final String key, final int min, final int max0,
                            final TextView value, final String unit, final int notify) {
+        final int max = liveMax(key, max0);
         final EditText et = new EditText(this);
         et.setInputType(InputType.TYPE_CLASS_NUMBER);
         et.setSingleLine(true);
@@ -2529,19 +2550,20 @@ public class MainActivity extends Activity {
                     }
                     p.edit().putInt(key, v).apply();
                     value.setText(valueText(v, unit));
-                    if (key.startsWith("pomo_") && Prefs.clampBreaks(p)) fillTimer();
+                    afterPomo(key);
                     changed(notify);
                 })
                 .setNegativeButton("Cancel", null).show();
     }
 
     private void bump(String key, int delta, int min, int max, TextView value, String unit, int notify) {
+        max = liveMax(key, max);
         int v = Prefs.getInt(p, key) + delta;
         if (v < min) v = min;
         if (v > max) v = max;
         p.edit().putInt(key, v).apply();
         value.setText(valueText(v, unit));
-        if (key.startsWith("pomo_") && Prefs.clampBreaks(p)) fillTimer();
+        afterPomo(key);
         changed(notify);
     }
 
@@ -3661,6 +3683,7 @@ final class Prefs {
 
     /** Pulls saved break lengths down to the limits. Returns true if anything changed. */
     static boolean clampBreaks(SharedPreferences p) {
+        if (getInt(p, POMO_ROUNDS) < MIN_ROUNDS) p.edit().putInt(POMO_ROUNDS, MIN_ROUNDS).apply();
         if (getInt(p, LIMIT_BREAKS) != 1) return false;
         int s = getInt(p, POMO_SHORT);
         int l = getInt(p, POMO_LONG);
@@ -3671,10 +3694,13 @@ final class Prefs {
         return true;
     }
 
-    /** Longest long break allowed: the focus time, at most 30 minutes. */
+    /** Longest long break allowed: two thirds of the focus time, at most 30 minutes. */
     static int maxLong(SharedPreferences p) {
-        return Math.max(1, Math.min(getInt(p, POMO_WORK), 30));
+        return Math.max(1, Math.min(getInt(p, POMO_WORK) * 2 / 3, 30));
     }
+
+    /** Fewest focus rounds before a long break. */
+    static final int MIN_ROUNDS = 3;
 
     static int defaultFor(String key) {
         switch (key) {
@@ -3984,7 +4010,7 @@ public class SettingsActivity extends Activity {
                 Prefs.MOTION_PAUSE);
 
         toggle(c, "Limit Pomodoro breaks",
-                "Short breaks up to a fifth of focus time, long breaks up to the focus time (max 30 min).",
+                "Short breaks up to a fifth of focus time, long breaks up to two thirds of it (max 30 min).",
                 Prefs.LIMIT_BREAKS);
 
         // Help
@@ -6271,23 +6297,26 @@ import android.content.SharedPreferences;
 /** The one-time "What's new" dialog after an update, and the "More tips" page. */
 final class WhatsNew {
     /** Raise this by one with every update that has news to show. */
-    static final int VERSION = 15;
+    static final int VERSION = 17;
 
     private WhatsNew() {
     }
 
     /** News per update, newest first. VERSIONS[i] goes with NEWS[i]. */
-    private static final int[] VERSIONS = {15, 14, 13, 12};
+    private static final int[] VERSIONS = {17, 16, 15, 14, 13, 12};
 
     private static final String[] NEWS = {
+            "\u2022 Pomodoro: the long break limit is now two thirds of your focus time (max 30 min), "
+                    + "and rounds before a long break start at 3.",
+            "\u2022 Fixed the Pomodoro +/- buttons: they ran away to 1 min and stopped working.",
             "\u2022 Pomodoro break limit is now a fifth of your focus time (25 min focus gives 5 min breaks). "
                     + "The break boxes stop at the limit and shorten themselves when you lower focus time.",
             "\u2022 New widget: ring, exam countdown, this week, change vs last week and a graph. Resize it "
                     + "for a bigger or smaller view.\n\n"
                     + "\u2022 Brighter colours and weekday names on the graph, the Stats tab and the report card.\n\n"
                     + "\u2022 The tile and widget buttons no longer pull the app to the front.\n\n"
-                    + "\u2022 Pomodoro breaks are now limited: short up to a fifth of focus, long up to the "
-                    + "focus time (max 30 min). Turn it off in Settings.\n\n"
+                    + "\u2022 Pomodoro breaks are now limited: short up to a fifth of focus, long up to two "
+                    + "thirds of focus (max 30 min). Turn it off in Settings.\n\n"
                     + "\u2022 Settings: Download link and Share app link.",
             "\u2022 Desk mode: tap the clock to pause or resume, hold it to restart. Tap the empty space "
                     + "for the buttons.\n\n"
